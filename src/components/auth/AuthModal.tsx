@@ -140,9 +140,18 @@ export function AuthModal({ open, initial = 'login', onClose }: { open: boolean;
 
             <form onSubmit={submit} className="flex flex-col gap-3">
               {isStatic && (
-                <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
-                  {t('auth.err.static')}
-                </p>
+                <div className="rounded-xl bg-amber-500/10 px-3 py-2.5 text-sm text-amber-400">
+                  <p>{t('auth.err.static')}</p>
+                  <a
+                    href={t('auth.static.url')}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 block rounded-lg bg-cyan-500/90 px-3 py-2 text-center font-semibold text-night-950 transition hover:bg-cyan-400"
+                  >
+                    {t('auth.static.title')} ← {t('auth.static.url').replace('https://', '')}
+                  </a>
+                  <p className="mt-1.5 text-[11px] text-amber-300/70">{t('auth.static.hint')}</p>
+                </div>
               )}
               {mode === 'signup' && (
                 <div className="relative">
