@@ -11,6 +11,7 @@ tsconfig.tsbuildinfo
 vite.log
 
 # بيانات المحلي والخصوصية
+data/
 server/workspace/
 server/data/
 server/server.log
