@@ -334,7 +334,7 @@ export function ChatPanel() {
   const a = AGENT_MAP[agent]
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col bg-transparent">
+    <div className="h-full flex min-w-0 flex-col bg-transparent">
       <div className="border-b border-white/10 bg-night-900/30 backdrop-blur-xl">
         <div className="flex items-center justify-between gap-2 px-4 pt-2">
           <button
