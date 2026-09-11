@@ -115,23 +115,48 @@ function Node({ node, depth }: { node: FileNode; depth: number }) {
 
 export function FileTree() {
   const files = useApp((s) => s.files)
+  const projectName = useApp((s) => s.projectName)
   const dirs = files.filter((f) => f.type === 'dir')
+  const projects = dirs.filter((f) => !f.name.startsWith('_') && f.name !== 'uploads')
   const rootFiles = files.filter((f) => f.type === 'file')
+  const pick = (p: string) => useApp.getState().openArena(p)
 
   return (
-    <div className="h-full overflow-auto p-2">
-      {dirs.map((d) => (
-        <Node key={d.path} node={d} depth={0} />
-      ))}
-      {rootFiles.map((f) => (
-        <Node key={f.path} node={f} depth={0} />
-      ))}
-      {!files.length && (
-        <div className="mt-10 flex flex-col items-center gap-2 text-center text-slate-500">
-          <FileText size={28} className="opacity-40" />
-          <p className="text-xs">لا ملفات بعد — اطلب من الوكيل بناء مشروع</p>
+    <div className="flex h-full flex-col">
+      {projects.length > 1 && (
+        <div className="flex flex-wrap gap-1 border-b border-white/5 p-2">
+          {[
+            { n: 'all', label: 'كل المساحة' },
+            ...projects.map((p) => ({ n: p.name, label: p.name })),
+          ].map((p) => (
+            <button
+              key={p.n}
+              onClick={() => pick(p.n)}
+              className={`rounded-lg px-2 py-0.5 text-[11px] transition ${
+                (p.n === 'all' && projectName === 'project') || p.n === projectName
+                  ? 'bg-cyan-500/20 text-cyan-200 ring-1 ring-cyan-400/30'
+                  : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
         </div>
       )}
+      <div className="flex-1 overflow-auto p-2">
+        {dirs.map((d) => (
+          <Node key={d.path} node={d} depth={0} />
+        ))}
+        {rootFiles.map((f) => (
+          <Node key={f.path} node={f} depth={0} />
+        ))}
+        {!files.length && (
+          <div className="mt-10 flex flex-col items-center gap-2 text-center text-slate-500">
+            <FileText size={28} className="opacity-40" />
+            <p className="text-xs">لا ملفات بعد — اطلب من الوكيل بناء مشروع</p>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

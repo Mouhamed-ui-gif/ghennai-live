@@ -1,3 +1,4 @@
+import path from 'path'
 import tools from '../tools/registry.js'
 import { generate } from '../lib/modelRouter.js'
 import { emitUser } from '../lib/events.js'
@@ -5,6 +6,7 @@ import { audit } from '../lib/auditLog.js'
 import { userWorkspace } from '../lib/paths.js'
 import { contextBlock, rememberProject } from '../lib/memory.js'
 import { seedTemplates } from '../lib/templateKit.js'
+import { repairUserSites } from '../lib/siteDoctor.js'
 
 const MAX_ITERATIONS = 12
 
@@ -36,6 +38,8 @@ RULES:
 5. Write complete real files, not placeholders or "/* ... */" stubs.
 6. For static sites (HTML/CSS/JS) write the files directly — do NOT scaffold with npm/vite unless the user explicitly asked for a React/app project.
 7. Finish with a clear summary in the user's language: what was built (pages/sections), how to open it, and the file tree.
+8. INTEGRITY: Never reference a file that does not exist. Before finishing, READ BACK your index.html and confirm every local href="..." and src="..." points to a real file you created. Never write href="style.css" or src="app.js" without also writing those files. Never use Tailwind classes (flex, bg-*, p-4, text-*, grid, etc.) unless you also include a real stylesheet that styles them — either copy a complete template (index.html + style.css + app.js together) or DROP external references and INLINE all CSS in a <style> tag and JS in a <script> tag inside index.html (the lightest, most robust option). Generated HTML must start with <!DOCTYPE html> immediately.
+9. PREFER the project templates in "_ghennai/templates": pick the closest one, COPY the whole folder (index.html + style.css + app.js together, do not split them), then edit its content/colors/sections to match the request. Template folders already contain complete working CSS/JS.
 
 CREATOR INFO: You are part of GHENNAI — created and built with passion by **محمد غناي (Mohamed Ghennay)**, the sole creator and developer of Ghennai. If the user asks "من صنعك؟ / من الذي صنعك؟ / who made you?", answer proudly: "صنعني محمد غناي". 
 
@@ -104,6 +108,21 @@ const TOOL_SCHEMAS = [
 
 function toolSchemaMap() {
   return { writeFile: 'filesystem', readFile: 'filesystem', listDir: 'filesystem', runTerminal: 'terminal' }
+}
+
+/** فحص وإصلاح مواقع ناقصة بعد انتهاء البناء — يخطّر الواجهة بتحديث المعاينة */
+function runRepairs(user) {
+  const ws = userWorkspace(user.email)
+  try {
+    const result = repairUserSites(user.email)
+    for (const f of result.fixed || []) {
+      const rel = path.relative(ws, f.file) || 'index.html'
+      emitUser(user.email, { type: 'workspace_changed', path: rel, action: 'write', repaired: true, fixes: f.fixes })
+    }
+    return result
+  } catch {
+    return { projects: 0, repaired: 0, fixed: [] }
+  }
 }
 
 function toCallParams(name, args) {
@@ -182,6 +201,7 @@ async function* runCoding(user, userMessage) {
 
     const toolCalls = res.toolCalls || []
     if (!toolCalls.length) {
+      runRepairs(user)
       yield { type: 'coding_done', built: built || attempts > 0, content: res.content }
       yield { type: 'answer', content: res.content || 'انتهت المهمة.' }
       rememberProject(user.email, 'last', { summary: String(res.content).slice(0, 400), ts: Date.now() })
@@ -209,6 +229,7 @@ async function* runCoding(user, userMessage) {
     if (messages.length > 40) messages.splice(4, messages.length - 36)
   }
 
+  runRepairs(user)
   yield { type: 'coding_done', built, content: 'تم الوصول للحد الأقصى من الخطوات.' }
   yield { type: 'agent', agent: 'Coding', message: 'الوصول إلى الحد الأقصى من الخطوات — التوقف.', status: 'error' }
   yield { type: 'answer', content: 'تم الوصول إلى الحد الأقصى لخطوات التنفيذ. تحقق من مساحة العمل لمعرفة ما تم إنجازه.' }

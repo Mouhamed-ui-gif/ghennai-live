@@ -42,6 +42,14 @@ export function useChat() {
           break
         }
         case 'workspace_changed': {
+          const ev = e as unknown as { path?: string; repaired?: boolean }
+          const cur = useApp.getState().projectName
+          if (cur === 'project' && ev.path) {
+            const first = String(ev.path).split('/')[0]
+            if (first && !first.startsWith('_') && first !== 'uploads' && !ev.repaired) {
+              useApp.getState().openArena(first)
+            }
+          }
           void refreshTree()
           bumpPreview()
           break

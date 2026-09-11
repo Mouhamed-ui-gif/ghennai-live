@@ -37,7 +37,9 @@ function rewriteHtml(html: string, map: Map<string, string>, norm: (p: string) =
     const stripped = ref.replace(/^\.?\//, '').split('?')[0]
     const key = norm(stripped)
     const blob = map.get(key)
-    return blob ? `${attr}="${blob}"` : all
+    if (blob) return `${attr}="${blob}"`
+    if (/\.(css|js|mjs)$/i.test(stripped)) return ''
+    return all
   })
   out = out.replace(/url\(\s*["']?([^"')]+)["']?\s*\)/gi, (all, ref: string) => {
     if (ref.startsWith('data:') || ref.startsWith('blob:') || ref.startsWith('http')) return all
@@ -60,9 +62,10 @@ export function PreviewPane() {
     setLoading(true)
     let newBlobs: string[] = []
     try {
-      const { tree } = await workspace.tree()
-      const base = findIndexBase(tree) || firstDir(tree) || null
-      const { tree: sub } = base ? await workspace.tree(base) : { tree }
+      const scope = useApp.getState().projectName && useApp.getState().projectName !== 'project' ? useApp.getState().projectName : null
+      const { tree: fullTree } = scope ? await workspace.tree(scope) : await workspace.tree()
+      const base = scope || findIndexBase(fullTree) || firstDir(fullTree) || null
+      const { tree: sub } = base ? await workspace.tree(base) : { tree: fullTree }
       const files: { rel: string; content: string }[] = []
       const walk = async (list: FileNode[], prefix = '') => {
         for (const f of list) {
