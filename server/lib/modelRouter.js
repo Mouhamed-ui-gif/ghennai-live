@@ -279,7 +279,15 @@ async function streamNdjson(url, options, body, handle, externalSignal) {
   const controller = new AbortController()
   const t = setTimeout(() => controller.abort(), CLOUD_TIMEOUT_MS * 2)
   const signal = externalSignal || controller.signal
-  const res = await fetch(url, { ...options, signal })
+  const isAbort = (e) => e?.name === 'AbortError' || e?.cause?.name === 'AbortError'
+  let res
+  try {
+    res = await fetch(url, { ...options, signal })
+  } catch (err) {
+    clearTimeout(t)
+    if (isAbort(err)) return -1
+    throw err
+  }
   if (!res.ok || !res.body) {
     clearTimeout(t)
     const txt = await res.text().catch(() => '')

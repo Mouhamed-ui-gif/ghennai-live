@@ -18,11 +18,19 @@ dotenv.config()
 
 const app = express()
 
+app.set('trust proxy', 'loopback')
+
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }))
 app.use(cors())
 app.use(express.json({ limit: '60mb' }))
 
-const apiLimiter = rateLimit({ windowMs: 60000, limit: 120, standardHeaders: true, legacyHeaders: false })
+const apiLimiter = rateLimit({
+  windowMs: 60000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { xForwardedForHeader: false, trustProxy: false },
+})
 app.use('/api', apiLimiter)
 
 app.get('/api/health', (req, res) => res.json({ ok: true }))

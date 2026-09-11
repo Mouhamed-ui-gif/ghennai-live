@@ -8,6 +8,15 @@ import { ensureWhisperServer } from './routes/voice.js'
 dotenv.config()
 const PORT = process.env.PORT || 3001
 
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason)
+  if (!/abort|AbortError/i.test(msg)) console.error('[unhandledRejection]', msg)
+})
+
+process.on('uncaughtException', (err) => {
+  if (!/abort|AbortError/i.test(String(err?.message || err))) console.error('[uncaughtException]', err?.message || err)
+})
+
 const server = createServer(app)
 bindSocket(server)
 
