@@ -20,15 +20,29 @@ export function AuthModal({ open, initial = 'login', onClose }: { open: boolean;
   const [confirm, setConfirm] = useState('')
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
+  const [backendUp, setBackendUp] = useState<boolean | null>(null)
   const gBtnRef = useRef<HTMLDivElement>(null)
   const [gReady, setGReady] = useState(false)
 
-  const isStatic =
-    typeof window !== 'undefined' &&
-    !!(window.location?.hostname ?? '') &&
-    !['localhost', '::1', '[::1]', '127.0.0.1'].includes(window.location.hostname) &&
-    !/^(\d{1,3}\.){3}\d{1,3}$/.test(window.location.hostname) &&
-    !/^\[?([0-9a-f]{0,4}:){2,7}[0-9a-f]+\]?$/i.test(window.location.hostname)
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setBackendUp(null)
+    fetch('/api/health', { cache: 'no-store', headers: { Accept: 'application/json' } })
+      .then((r) => {
+        if (cancelled) return
+        if (!r.ok) return setBackendUp(false)
+        r.json()
+          .then((j) => !cancelled && setBackendUp(!!j?.ok))
+          .catch(() => !cancelled && setBackendUp(false))
+      })
+      .catch(() => !cancelled && setBackendUp(false))
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
+  const isStatic = backendUp === false
 
   useEffect(() => {
     if (open) {
