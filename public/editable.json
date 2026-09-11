@@ -1,0 +1,187 @@
+{
+  "updatedAt": "2026-09-10",
+  "site": {
+    "name": "Ghennai"
+  },
+  "app": {
+    "taglineAr": "مستقبل البرمجة والإبداع بين يديك",
+    "taglineEn": "The future of coding & creativity in your hands",
+    "descAr": "وكيلك الذكي الأول. يبني لك المواقع، يحلل الصور، يتعامل بالصوت، وينشر مشاريعك بضغطة زر — مجاني 100% ومحلي بالكامل.",
+    "descEn": "Your first smart agent. It builds your sites, analyzes images, works with your voice, and publishes your projects with one click — 100% free & fully local."
+  },
+  "landing": {
+    "hero": {
+      "badgeAr": "مجاني بالكامل · مفتوح المصدر · يعمل محليًا",
+      "badgeEn": "100% free · open source · runs locally",
+      "subAr": "ابنِ، حلّل، انشر — كل ذلك في مكان واحد.",
+      "subEn": "Build, analyze, ship — all in one place.",
+      "ctaAr": "ابدأ مجانًا",
+      "ctaEn": "Start for free",
+      "cta2Ar": "تحميل التطبيق",
+      "cta2En": "Download app",
+      "stats": [
+        { "value": "7", "labelAr": "وكلاء ذكاء", "labelEn": "AI agents" },
+        { "value": "3", "labelAr": "نماذج محلية", "labelEn": "local models" },
+        { "value": "0$", "labelAr": "مجاني للأبد", "labelEn": "free forever" }
+      ]
+    },
+    "features": {
+      "eyebrowAr": "القوة",
+      "eyebrowEn": "The power",
+      "titleAr": "عالم كامل من الذكاء",
+      "titleEn": "A whole world of intelligence",
+      "subAr": "كل ما تحتاجه في منصة واحدة — كل شيء مجاني.",
+      "subEn": "Everything you need in one platform — all free.",
+      "cards": [
+        {
+          "titleAr": "وكيل برمجي ذكي",
+          "titleEn": "Smart Coding Agent",
+          "descAr": "قل «ابنِ لي موقعًا عن القهوة» وشاهد الوكيل يكتب الأكواد أمامك، يبنيها، يختبرها، وينشرها برابط مباشر.",
+          "descEn": "Say \"build me a coffee site\" and watch the agent write the code, build, test and publish it with a live link."
+        },
+        {
+          "titleAr": "رؤية ذكية للصور",
+          "titleEn": "Smart image vision",
+          "descAr": "ارفع صورة واجهة أو رسمًا — يحللها الوكيل محليًا ويستخرج التصميم ليبنيه لك كموقع حقيقي.",
+          "descEn": "Upload a UI screenshot or sketch — the agent analyzes it locally and builds it as a real website."
+        },
+        {
+          "titleAr": "أوامر صوتية",
+          "titleEn": "Voice commands",
+          "descAr": "تحدث بالعربية أو الإنجليزية، يفهمك الوكيل وينفذ، ويقرأ لك الرد بصوت.",
+          "descEn": "Speak Arabic or English, the agent understands, executes, and reads the answer back to you."
+        },
+        {
+          "titleAr": "نشر بضغطة زر",
+          "titleEn": "One-click publishing",
+          "descAr": "بعد البناء يسألك: هل تريد النشر؟ ثم يرفع مشروعك على GitHub ويرسل لك الرابط المباشر.",
+          "descEn": "After building it asks: publish? Then it pushes your project to GitHub and sends you the live link."
+        },
+        {
+          "titleAr": "العقل المشترك",
+          "titleEn": "Shared Mind",
+          "descAr": "يتذكر كل مشروع وكل خطأ وكل تفضيل. قل «عدّل الموقع الذي بنيته أمس» وسيعرف تمامًا أي موقع تقصد.",
+          "descEn": "Remembers every project, every mistake, every preference. \"Fix the site I built yesterday\" just works."
+        }
+      ]
+    },
+    "agentsShow": {
+      "eyebrowAr": "فريق Ghennai",
+      "eyebrowEn": "The Ghennai crew",
+      "titleAr": "سبعة وكلاء، عقلٌ واحد",
+      "titleEn": "Seven agents, one mind",
+      "subAr": "كل وكيل خبيرٌ في مجاله بمهارات وروحٍ مخصصة — يتعاونون لبناء أي شيء تريده.",
+      "subEn": "Each agent is a specialist with a unique spirit and skill set — they collaborate to build anything you want.",
+      "ctaAr": "جرّبهم الآن",
+      "ctaEn": "Meet them now"
+    },
+    "how": {
+      "eyebrowAr": "بخطوات بسيطة",
+      "eyebrowEn": "Simple steps",
+      "titleAr": "كيف يعمل",
+      "titleEn": "How it works",
+      "steps": [
+        {
+          "titleAr": "اكتب أو تكلم",
+          "titleEn": "Type or speak",
+          "descAr": "حدّد للوكيل ما تريد بلغتك الطبيعية — بسيطًا مثل محادثة.",
+          "descEn": "Tell the agent what you want in natural language — as simple as chatting."
+        },
+        {
+          "titleAr": "يختار الوكيل المناسب",
+          "titleEn": "Right agent picked",
+          "descAr": "Ghennai Core يوجّه طلبك إلى Coding أو Research أو Study أو Design.",
+          "descEn": "Ghennai Core routes you to Coding, Research, Study or Design."
+        },
+        {
+          "titleAr": "المسرح البرمجي",
+          "titleEn": "Code Theater",
+          "descAr": "Terminal يكتب الأوامر، وأكواد تعرض، ومعاينة حية تولد أمام عينيك.",
+          "descEn": "A terminal that types commands, code that renders, and a live preview that grows before your eyes."
+        },
+        {
+          "titleAr": "نشر فوري",
+          "titleEn": "Instant publish",
+          "descAr": "اقبل النشر وسيرتفع مشروعك على GitHub برابط مباشر خلال ثوان.",
+          "descEn": "Accept the publish and your project goes live on GitHub with a direct link in seconds."
+        }
+      ]
+    },
+    "download": {
+      "eyebrowAr": "جاهز للانطلاق",
+      "eyebrowEn": "Ready when you are",
+      "titleAr": "نزّل Ghennai على أجهزتك",
+      "titleEn": "Download Ghennai on your devices",
+      "subAr": "تثبيت التطبيق كملف ويب على هاتفك أو حاسوبك — يعمل أوفلاين.",
+      "subEn": "Install the app as a web app on your phone or desktop — works offline."
+    },
+    "footer": {
+      "dlAr": "التحميل",
+      "dlEn": "Download",
+      "rightsAr": "جميع الحقوق محفوظة.",
+      "rightsEn": "All rights reserved.",
+      "privacyAr": "الخصوصية",
+      "privacyEn": "Privacy",
+      "opensourceAr": "مفتوح المصدر — MIT",
+      "opensourceEn": "Open source — MIT"
+    }
+  },
+  "agents": {
+    "Core": {
+      "mottoAr": "أُنسّق كل شيء وأنفّذ",
+      "mottoEn": "I orchestrate everything",
+      "taglineAr": "موجّه كل شيء — عقلك المشترك",
+      "taglineEn": "The universal mind",
+      "skillsAr": ["توجيه المهام", "التخطيط الذكي", "ربط الوكلاء", "المراجعة والتقييم", "الردود العامة"],
+      "skillsEn": ["Task routing", "Smart planning", "Agent orchestration", "Review & grading", "General chat"]
+    },
+    "Coding": {
+      "mottoAr": "أبني وينفّذ في مساحة عملك",
+      "mottoEn": "I build & run in your workspace",
+      "taglineAr": "عالم الكود والبناء",
+      "taglineEn": "The code dimension",
+      "skillsAr": ["بناء المواقع", "HTML/CSS/JS", "تطبيقات الويب", "إصلاح الأخطاء", "تحويل الصور لمواقع"],
+      "skillsEn": ["Website building", "HTML/CSS/JS", "Web apps", "Debugging", "Image → site"]
+    },
+    "Research": {
+      "mottoAr": "أبحث وأحقّق قبل أن أجيب",
+      "mottoEn": "I verify before I answer",
+      "taglineAr": "عالم البحث والمعلومات",
+      "taglineEn": "The discovery world",
+      "skillsAr": ["البحث على الويب", "جلب صفحات", "الأخبار والطقس", "البحث في الذاكرة", "ملخصات موثقة"],
+      "skillsEn": ["Web search", "Page fetching", "News & weather", "Memory search", "Cited summaries"]
+    },
+    "Study": {
+      "mottoAr": "أشرح خطوة بخطوة حتى تفهم",
+      "mottoEn": "I teach step by step",
+      "taglineAr": "عالم التعلم والفهم",
+      "taglineEn": "The learning realm",
+      "skillsAr": ["تلقين المفاهيم", "أسئلة وامتحانات", "خطط دراسة", "أمثلة وتشبيهات", "ملخصات"],
+      "skillsEn": ["Concept teaching", "Quizzes & tests", "Study plans", "Examples & analogies", "Summaries"]
+    },
+    "Design": {
+      "mottoAr": "أحوّل كل فكرة إلى جمال",
+      "mottoEn": "I turn ideas into beauty",
+      "taglineAr": "عالم الجمال والتصميم",
+      "taglineEn": "The artistic universe",
+      "skillsAr": ["لوحات ألوان", "تخطيط الواجهات", "كتابة الطباعة (Typography)", "شعارات وهوية", "أفكار إبداعية"],
+      "skillsEn": ["Color palettes", "Wireframes", "Typography", "Logos & identity", "Creative directions"]
+    },
+    "Genie": {
+      "mottoAr": "أحقّق كل أمنية، وأجيب كل سؤال",
+      "mottoEn": "I fulfill every wish",
+      "taglineAr": "عالم الجني — نفّذ ما تشاء",
+      "taglineEn": "The genie realm",
+      "skillsAr": ["أي سؤال في الكون", "بناء وتنفيذ فوري", "بحث وتحليل عميق", "نظم ذكية وأتمتة", "تصميم ونشر مواقع"],
+      "skillsEn": ["Any question", "Instant build & run", "Deep research", "Smart systems & automation", "Design & deploy"]
+    },
+    "Voice": {
+      "mottoAr": "أسمعك وأردّ عليك بصوتك",
+      "mottoEn": "I listen, then speak to you",
+      "taglineAr": "عالم الصوت — تحدّث وأنفّذ",
+      "taglineEn": "The voice dimension",
+      "skillsAr": ["أوامر صوتية فورية", "قراءة الردود بصوت", "نبرة مميزة لكل وكيل", "محادثة حية بالاستماع", "عربي وإنجليزي"],
+      "skillsEn": ["Instant voice commands", "Read replies aloud", "Unique tone per agent", "Live hands-free chat", "Arabic & English"]
+    }
+  }
+}

@@ -1,0 +1,43 @@
+# Render blueprint — يستخدمه Render تلقائيًا عند اختيار Blueprint.
+# رابط المنشور يتم إنشاؤه تلقائيًا مثل: https://ghennai.onrender.com
+# بعد النشر: ضع مفاتيحك في المتغيرات البيئية (انظر .env.example)
+services:
+  - type: web
+    name: ghennai
+    runtime: docker
+    plan: free
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: VITE_BASE
+        value: /
+      - key: PORT
+        value: 3001
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: SERPER_API_KEY
+        sync: false
+      - key: GOOGLE_STT_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false

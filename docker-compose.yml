@@ -1,0 +1,29 @@
+services:
+  app:
+    build: .
+    ports:
+      - '3001:3001'
+    environment:
+      - PORT=3001
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=qwen2.5:3b
+      - OLLAMA_VISION_MODEL=moondream
+    volumes:
+      - vault:/app/server/workspace
+      - data:/app/server/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - '11434:11434'
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  vault:
+  data:
+  ollama:

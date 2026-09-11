@@ -1,0 +1,10 @@
+{
+  "users": {
+    "test@test.com": {
+      "email": "test@test.com",
+      "name": "Tester",
+      "password": "$2a$10$4ueOtVyg66O/.6BAAvltO.Mkcs7/vJ64ZY7mohjGusYpC6s/hlD7y",
+      "createdAt": "2026-09-05T08:53:15.382Z"
+    }
+  }
+}

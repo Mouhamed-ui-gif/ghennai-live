@@ -1,0 +1,31 @@
+{
+  "name": "Ghennai AI",
+  "short_name": "Ghennai",
+  "description": "وكيلك الذكي الأول — يبني المواقع، يحلل الصور، يسمع صوتك، وينشر مشاريعك بضغطة زر. مجاني ومفتوح المصدر.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#060913",
+  "theme_color": "#060913",
+  "dir": "rtl",
+  "lang": "ar",
+  "categories": ["developer tools", "productivity", "ai"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "الوكلاء",
+      "short_name": "الوكلاء",
+      "url": "/app",
+      "description": "فتح لوحة التحكم والوكلاء"
+    }
+  ]
+}
