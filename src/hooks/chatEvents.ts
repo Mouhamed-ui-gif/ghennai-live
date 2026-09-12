@@ -19,9 +19,10 @@ const uiLang = () => (document.documentElement.lang === 'ar' ? 'ar' : 'en')
 export function handleChatEvent(e: SSEvent): void {
   switch (e.type) {
     case 'coding_start': {
-      const ev = e as unknown as { project?: string; request?: string; mode?: string; element?: unknown }
+      const ev = e as unknown as { project?: string; request?: string; mode?: string; element?: unknown; root?: string | null }
       const st = useApp.getState()
       st.enterCodingMode(ev.project || 'الموقع الجديد', ev.mode === 'edit' ? 'edit' : 'build', ev.request || '')
+      st.setCodingProjectFolder(ev.root || null)
       st.pushCodeAction({ kind: 'notice', text: ev.mode === 'edit' ? `✂️ ${ev.request?.slice(0, 140) || 'تعديل عنصر'}` : `⏺ بدء بناء «${ev.project}»` })
       if (ev.mode === 'edit' && ev.element) st.setEditTarget(ev.element as { tag: string; id: string; className: string; text: string; href?: string | null; src?: string | null })
       st.pushActivity({ agent: 'Coding', message: ev.mode === 'edit' ? '✂️ تعديل عنصر محدد' : `⏺ يبدأ بناء «${ev.project}»`, status: 'running' })

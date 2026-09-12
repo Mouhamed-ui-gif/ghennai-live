@@ -7,7 +7,7 @@ import { userWorkspace } from '../lib/paths.js'
 import { contextBlock, rememberProject } from '../lib/memory.js'
 import { seedTemplates } from '../lib/templateKit.js'
 import { repairUserSites, validateUserSite } from '../lib/siteDoctor.js'
-import { ensureProject, setProjectMeta, snapshotProject, listVersions, guessProjectRoot } from '../lib/projects.js'
+import { ensureProject, setProjectMeta, snapshotProject, listVersions, guessProjectRoot, siteRootFor } from '../lib/projects.js'
 
 const MAX_ITERATIONS = 12
 const MAX_TYPED_CHARS = 30000
@@ -247,23 +247,28 @@ async function* runCoding(user, userMessage, opts = {}) {
   const editMode = opts?.mode === 'edit'
   const memory = editMode ? '' : contextBlock(user.email, userMessage)
   const messages = []
+  let workingRoot = '.'
   if (editMode) {
-    yield { type: 'coding_start', project: detectProjectName(userMessage), request: userMessage, mode: 'edit', element: opts.element || null }
+    if (opts.root) workingRoot = guessProjectRoot(ws, opts.root) || '.'
+    yield { type: 'coding_start', project: detectProjectName(userMessage), request: userMessage, mode: 'edit', element: opts.element || null, root: opts.root || null }
     messages.push({ role: 'system', content: EDIT_SYSTEM_PROMPT(opts.element || null, userMessage) })
     messages.push({
       role: 'user',
-      content: `Workspace root: ${ws}\n\nThe user clicked this element in their live preview and wants this change applied.\nRead the source files first, then use replaceInFile (or writeFile as a last resort). Verify before replying.`,
+      content: `Workspace root: ${ws}\nThis project's folder: "${workingRoot}" — read/edit files ONLY inside it.\n\nThe user clicked this element in their live preview and wants this change applied.\nRead the source files first, then use replaceInFile (or writeFile as a last resort). Verify before replying.`,
     })
   } else {
-    const root = guessProjectRoot(ws) || '.'
-    yield { type: 'coding_start', project: detectProjectName(userMessage), request: userMessage, mode: 'build' }
-    const registered = ensureProject(user.email, root, detectProjectName(userMessage))
+    const projectName = detectProjectName(userMessage)
+    const projectRoot = siteRootFor(user.email, projectName)
+    workingRoot = projectRoot
+    yield { type: 'coding_start', project: projectName, request: userMessage, mode: 'build', root: projectRoot }
+    const registered = ensureProject(user.email, projectRoot, projectName)
     emitProjectState(user.email, registered)
     messages.push(
       { role: 'system', content: SYSTEM_PROMPT + memory },
       {
         role: 'user',
-        content: `Workspace root: ${ws}\n\nUser request: ${userMessage}\n\nTemplate folder "_ghennai/templates" already exists in the workspace. Use the tools to complete it. When done, reply with the final summary.` +
+        content:
+          `Workspace root: ${ws}\n\nTHIS PROJECT'S OWN FOLDER: "${projectRoot}" — write EVERY file of this site inside it with full prefixed paths (e.g. "${projectRoot}/index.html", "${projectRoot}/style.css", "${projectRoot}/app.js"). Never write outside that folder. Premium templates live in "_ghennai/templates" (copy a folder into "${projectRoot}" then edit it if helpful).\n\nUser request: ${userMessage}\n\nWhen done, reply with the final summary.` +
           `\n(ملاحظة نظام: إذا سُئلت من صنعك / من الذي صنعك / من برمجك / who created you؟ فأجب أن صانعك هو **محمد غناي (Mohamed Ghennay)** المطوّر الوحيد لـ GHENNAI.)`,
       },
     )
@@ -298,7 +303,7 @@ async function* runCoding(user, userMessage, opts = {}) {
       runRepairs(user)
 
       // ── الفحص الشامل قبل إعلان النجاح ──
-      const root = guessProjectRoot(ws, opts.root || null) || '.'
+      const root = workingRoot
       let checks = []
       if (!editMode) {
         checks = validateUserSite(user.email, root)

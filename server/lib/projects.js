@@ -43,6 +43,18 @@ const HASH = (s) => {
 
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'site'
 
+/** اسم مجلد لاتيني ثابت لكل موقع جديد (مقاوم للعربية): sites/<slug> أو sites/site-<hash> */
+export function siteRootFor(email, name) {
+  const raw = String(name || 'site')
+  const s = slug(raw)
+  const folder = /^[a-z0-9-]+$/.test(s) ? s : `site-${HASH(raw).slice(0, 4)}`
+  const root = `sites/${folder}`
+  const ws = userWorkspace(email)
+  const abs = safeResolve(ws, root)
+  if (!fs.existsSync(abs)) fs.mkdirSync(abs, { recursive: true })
+  return root
+}
+
 /** مجلدات/ملفات النظام التي لا تُعدّ مشاريع ولا تُنسَّخ */
 export const SYSTEM_DIRS = ['_ghennai', 'uploads', 'node_modules', '.git', 'dist', '.ghennai', 'light-assets', 'assets_old']
 

@@ -158,8 +158,14 @@ export function CodingMode() {
     let newBlobs: string[] = []
     try {
       const { tree: fullTree } = await workspace.tree()
-      const rootHasIndex = fullTree.some((n: FileNode) => n.type === 'file' && /^index\.html?$/.test(n.name))
-      const base = rootHasIndex ? null : findIndexBase(fullTree) || firstDir(fullTree) || null
+      const prjFolder = useApp.getState().codingProjectFolder
+      let base: string | null = null
+      if (prjFolder && prjFolder !== '.' && prjFolder !== '') {
+        base = prjFolder
+      } else {
+        const rootHasIndex = fullTree.some((n: FileNode) => n.type === 'file' && /^index\.html?$/.test(n.name))
+        base = rootHasIndex ? null : findIndexBase(fullTree) || firstDir(fullTree) || null
+      }
       const { tree: sub } = base ? await workspace.tree(base) : { tree: fullTree }
       const files: { rel: string; content: string }[] = []
       const walk = async (list: FileNode[], _prefix = '') => {

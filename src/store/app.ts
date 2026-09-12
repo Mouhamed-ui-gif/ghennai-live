@@ -134,6 +134,7 @@ interface AppState {
 
   arenaOpen: boolean
   projectName: string
+  codingProjectFolder: string | null
   built: boolean
   termOpen: boolean
   files: FileNode[]
@@ -226,6 +227,7 @@ interface AppState {
 
   openArena: (project: string) => void
   closeArena: () => void
+  setCodingProjectFolder: (root: string | null) => void
   setBuilt: (b: boolean) => void
   setTermOpen: (b: boolean) => void
   setFiles: (f: FileNode[]) => void
@@ -275,6 +277,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   arenaOpen: false,
   projectName: 'project',
+  codingProjectFolder: null,
   built: false,
   termOpen: false,
   files: [],
@@ -488,6 +491,7 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
   setAgent: (a) => set({ agent: a }),
 
   openArena: (project) => set({ arenaOpen: true, projectName: project || 'project' }),
+  setCodingProjectFolder: (root) => set({ codingProjectFolder: root }),
   closeArena: () => set({ arenaOpen: false, previewUrl: null }),
   setBuilt: (b) => set({ built: b }),
   setTermOpen: (b) => set({ termOpen: b }),
