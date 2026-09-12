@@ -313,6 +313,14 @@ async function generateOllama(options) {
 
   let res = await tryChat()
 
+  // ollama قد يرفض الاتصال لحظيًا أثناء تبديل النماذج — نحاول مجددًا مرتين مع فاصل قصير
+  if (!res.ok && res.status === 0) {
+    for (let i = 0; i < 2 && !res.ok; i++) {
+      await new Promise((r) => setTimeout(r, 1200 * (i + 1)))
+      res = await tryChat()
+    }
+  }
+
   if (!res.ok && res.status !== 0) {
     payload.model = payload.model === OLLAMA_MODEL ? OLLAMA_FALLBACK : OLLAMA_MODEL
     if (payload.model === OLLAMA_MODEL && payload.model === OLLAMA_FALLBACK) throw new Error(`Ollama failed: ${JSON.stringify(res)}`)
@@ -334,7 +342,16 @@ async function generate(options = {}) {
   const local = await ollamaIsAvailable()
 
   if (options.provider === 'ollama' || !cloudProviders().length || !local) {
-    if (local) return generateOllama(options)
+    if (local) {
+      try {
+        return await generateOllama(options)
+      } catch (e) {
+        // فشل ollama (انقطاع/حمل نموذج) — نلجأ للسحابة بدل إسقاط المهمة إن توفرت
+        const raced = await raceCloud(options, normalizeMessages(options))
+        if (raced?.ok) return raced
+        throw e
+      }
+    }
     const raced = await raceCloud(options, normalizeMessages(options))
     if (raced?.ok) return raced
     throw new Error('لا يوجد مولد نشط. شغّل Ollama (ollama serve) أو ضع مفتاحًا (GEMINI/OPENAI/GROQ/OPENROUTER/ANTHROPIC_API_KEY) في server/.env')
@@ -343,7 +360,13 @@ async function generate(options = {}) {
   const messages = normalizeMessages(options)
   const raced = await raceCloud(options, messages)
   if (raced?.ok) return raced
-  if (local) return generateOllama(options)
+  if (local) {
+    try {
+      return await generateOllama(options)
+    } catch (e) {
+      throw new Error(`Cloud inference failed: ${raced?.error || 'unknown'}; local ollama also errored: ${String(e?.message || e)}`)
+    }
+  }
   throw new Error(`Cloud inference failed: ${raced?.error || 'unknown'}`)
 }
 
@@ -406,6 +429,22 @@ async function streamChat(options, onToken, onDone) {
     return onDone?.({ ok: false, error: 'لا يوجد موفّر بث متاح' })
   }
 
+  /** ollama فشل بثًّا — نعطي النص عبر سحابة (بدون بث) بدل إسقاط الرد */
+  const localOrCloud = async (label) => {
+    try {
+      return await streamOllama(options, messages, onToken, onDone)
+    } catch (e) {
+      if (cloudProviders().length) {
+        const raced = await raceCloud(options, messages)
+        if (raced?.ok) {
+          onToken(raced.content)
+          return onDone?.({ ...raced, streamed: true, fallback: label })
+        }
+      }
+      return onDone?.({ ok: false, error: String(e?.message || e) })
+    }
+  }
+
   const buffers = new Map()
   const controllers = new Map()
   const results = new Map()
@@ -447,8 +486,10 @@ async function streamChat(options, onToken, onDone) {
 
   if (!winner) {
     for (const ac of controllers.values()) ac.abort()
-    if (local) return streamOllama(options, messages, onToken, onDone)
-    return onDone?.({ ok: false, error: 'لا يوجد موفّر بث متاح' })
+    if (local) return localOrCloud('no_first_token')
+    return raceCloud(options, messages).then((r) =>
+      r?.ok ? (onToken(r.content), onDone({ ...r, streamed: true })) : onDone({ ok: false, error: r?.error || 'لا يوجد موفّر بث متاح' })
+    )
   }
 
   for (const [name, ac] of controllers) if (name !== winner) ac.abort()
@@ -456,8 +497,10 @@ async function streamChat(options, onToken, onDone) {
   const res = await results.get(winner)
   if (res?.ok) return onDone?.({ ...res, streamed: true })
 
-  if (local) return streamOllama(options, messages, onToken, onDone)
-  return onDone?.({ ok: false, error: String(res?.error || 'stream failed') })
+  if (local) return localOrCloud('winner_empty')
+  return raceCloud(options, messages).then((r) =>
+    r?.ok ? (onToken(r.content), onDone({ ...r, streamed: true })) : onDone({ ok: false, error: String(res?.error || 'stream failed') })
+  )
 }
 
 async function streamCloud(name, p, options, messages, onToken, signal) {

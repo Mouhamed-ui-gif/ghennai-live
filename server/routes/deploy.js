@@ -51,6 +51,16 @@ function slugify(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'ghennai-project'
 }
 
+/** مستودع موجود لحساب نفس المالك؟ عند التكرار نحدّث نفس الرابط الدائم بدل مستودع جديد */
+async function existingOwnedRemote(projectDir, owner) {
+  const r = await run('git remote get-url origin', projectDir)
+  const u = r.out.trim()
+  if (!u) return null
+  const m = u.match(/github\.com[/:]([\w-]+)\/([\w.-]+?)(?:\.git)?$/)
+  if (m && m[1] === owner) return { owner: m[1], repo: m[2].replace(/\.git$/, '') }
+  return null
+}
+
 async function ghAvailable() {
   try {
     const { code } = await run('gh auth status', process.cwd())
@@ -109,6 +119,16 @@ router.post('/', requireAuth, async (req, res) => {
       const whoJson = await who.json()
       owner = whoJson.login
 
+      const owned = await existingOwnedRemote(projectDir, owner)
+      if (owned) {
+        emit(email, 'gh', `تحديث نفس المستودع «${owned.repo}» — رابطك الدائم يبقى كما هو ✓`)
+        repoName = owned.repo
+        url = `https://github.com/${owner}/${owned.repo}`
+        pagesUrl = `https://${owner}.github.io/${owned.repo}/`
+        const repush = await run(`git push -u origin main --force`, projectDir)
+        if (repush.code !== 0) throw new Error(`فشل الدفع للتحديث: ${repush.err.trim().slice(0, 180)}`)
+      } else {
+
       const create = await fetch(`${GITHUB_API}/user/repos`, {
         method: 'POST',
         headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'ghennai' },
@@ -137,8 +157,20 @@ router.post('/', requireAuth, async (req, res) => {
       if (push.code !== 0) throw new Error(`فشل الدفع: ${push.err.trim().slice(0, 180)}`)
       url = `https://github.com/${owner}/${repoName}`
       pagesUrl = `https://${owner}.github.io/${repoName}/`
+      }
     } else if (await ghAvailable()) {
       emit(email, 'gh', 'الدفع عبر GitHub CLI…')
+      const ghLogin = (await run('gh api user --jq .login 2>/dev/null', projectDir)).out.trim()
+      const owned = ghLogin ? await existingOwnedRemote(projectDir, ghLogin) : null
+      if (owned) {
+        emit(email, 'gh', `تحديث نفس المستودع «${owned.repo}» — رابطك الدائم يبقى كما هو ✓`)
+        repoName = owned.repo
+        owner = owned.owner
+        url = `https://github.com/${owner}/${owned.repo}`
+        pagesUrl = `https://${owner}.github.io/${owned.repo}/`
+        const repush = await run(`git push -u origin main --force`, projectDir)
+        if (repush.code !== 0) throw new Error(`فشل الدفع للتحديث: ${repush.err.trim().slice(0, 180)}`)
+      } else {
       let ghName = repoName
       const makeGh = async (nm) =>
         run(`git remote remove origin 2>/dev/null; gh repo create ${nm} --public --source=. --push`, projectDir)
@@ -159,6 +191,7 @@ router.post('/', requireAuth, async (req, res) => {
         pagesUrl = `https://${owner}.github.io/${m[2].replace(/\.git$/, '')}/`
       } else {
         url = `https://github.com/${owner || 'you'}/${ghName}`
+      }
       }
     } else {
       emit(email, 'gh', 'لا يوجد توكن GitHub ولا gh — اعرض التعليمات…')
