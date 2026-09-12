@@ -1,5 +1,4 @@
-import dotenv from 'dotenv'
-dotenv.config()
+import '../lib/env.js'
 
 const SERPER_KEY = process.env.SERPER_API_KEY || ''
 const SERPER_ENDPOINT = 'https://google.serper.dev/search'

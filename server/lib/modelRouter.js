@@ -1,5 +1,4 @@
-import dotenv from 'dotenv'
-dotenv.config()
+import './env.js'
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434'
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:3b'
@@ -20,11 +19,17 @@ function markBlockedOnQuota(name, res) {
 
 /** كل موفّر سحابي بمفتاحه ونموذجه؛ وOpenAI-format تُدعم الأدوات function/tool_calls */
 const PROVIDERS = {
-  gemini: { key: process.env.GEMINI_API_KEY || '', model: process.env.GEMINI_MODEL || 'gemini-2.0-flash', tools: false },
+  gemini: { key: process.env.GEMINI_API_KEY || '', model: process.env.GEMINI_MODEL || 'gemini-2.0-flash', tools: true },
   openai: { key: process.env.OPENAI_API_KEY || '', base: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', tools: true },
   groq: { key: process.env.GROQ_API_KEY || '', base: 'https://api.groq.com/openai/v1', model: process.env.GROQ_MODEL || 'llama-3.1-8b-instant', tools: true },
   openrouter: { key: process.env.OPENROUTER_API_KEY || '', base: 'https://openrouter.ai/api/v1', model: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct', tools: true },
   anthropic: { key: process.env.ANTHROPIC_API_KEY || '', model: process.env.ANTHROPIC_MODEL || 'claude-3-5-haiku-latest', tools: false },
+}
+
+/** الالتقاط: كل مزوّد يمكن أن يحمل نموذجًا مخصصًا للأدوات (X_TOOLS_MODEL) */
+for (const [name, p] of Object.entries(PROVIDERS)) {
+  const tm = process.env[`${name.toUpperCase()}_TOOLS_MODEL`]
+  if (tm) p.toolsModel = tm
 }
 
 async function fetchJson(url, options, timeoutMs = 15000) {
@@ -88,9 +93,9 @@ function normalizeMessages(options) {
   return messages.filter((m) => m.content !== undefined)
 }
 
-function openAIPayload(provider, options, messages, stream = false) {
+function openAIPayload(provider, options, messages, stream = false, model) {
   const payload = {
-    model: provider.model,
+    model: model || provider.model,
     messages: messages.map((m) => ({
       role: m.role === 'tool' ? 'tool' : m.role,
       content:
@@ -105,6 +110,11 @@ function openAIPayload(provider, options, messages, stream = false) {
   return payload
 }
 
+/** اختيار النموذج: عند استدعاء الأدوات نفضّل نموذجًا مخصصًا إن وُجد (X_TOOLS_MODEL) */
+function modelForCall(provider, options) {
+  return options.tools?.length && provider.toolsModel ? provider.toolsModel : provider.model
+}
+
 async function cloudChat(provider, options, messages) {
   const headers = { 'Content-Type': 'application/json' }
   if (provider.name === 'gemini') return cloudGemini(provider, options, messages, headers)
@@ -113,33 +123,96 @@ async function cloudChat(provider, options, messages) {
   if (provider.name === 'openrouter') headers['HTTP-Referer'] = 'http://localhost:3001'
   const res = await fetchJson(
     `${provider.base}/chat/completions`,
-    { method: 'POST', headers, body: JSON.stringify(openAIPayload(provider, options, messages)) },
+    { method: 'POST', headers, body: JSON.stringify(openAIPayload(provider, options, messages, false, modelForCall(provider, options))) },
     CLOUD_TIMEOUT_MS
   )
   if (!res.ok || !res.json?.choices?.[0]) return { ok: false, error: `cloud ${provider.name} ${res.status}: ${(res.text || '').slice(0, 200)}` }
   const c = res.json.choices[0]
   const content = c.message?.content || ''
   const toolCalls = c.message?.tool_calls || null
-  return { ok: true, provider: provider.name, model: provider.model, content: typeof content === 'string' ? content : JSON.stringify(content), toolCalls }
+  return { ok: true, provider: provider.name, model: modelForCall(provider, options), content: typeof content === 'string' ? content : JSON.stringify(content), toolCalls }
+}
+
+/** تحويل مخطط أدوات OpenAI إلى functionDeclarations الخاص بـ Gemini */
+function toGeminiTools(tools) {
+  if (!Array.isArray(tools) || !tools.length) return null
+  const decls = tools
+    .filter((t) => t?.function?.name)
+    .map((t) => ({
+      name: t.function.name,
+      description: t.function.description || '',
+      parameters: t.function.parameters || { type: 'object', properties: {} },
+    }))
+  if (!decls.length) return null
+  return [{ functionDeclarations: decls }]
 }
 
 async function cloudGemini(provider, options, messages, headers) {
-  const contents = messages
-    .filter((m) => m.role !== 'system')
-    .map((m) => ({ role: m.role === 'assistant' ? 'model' : m.role === 'tool' ? 'user' : 'user', parts: [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '') }] }))
+  const contents = []
+  const pending = []
+  for (const m of messages) {
+    if (m.role === 'system') continue
+    if (m.role === 'assistant') {
+      const parts = []
+      if (m.content) parts.push({ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })
+      for (const tc of m.tool_calls || []) {
+        const name = tc?.function?.name
+        if (name) {
+          parts.push({ functionCall: { name, args: typeof tc.function.arguments === 'string' ? safeJson(tc.function.arguments) : tc.function.arguments } })
+          pending.push(name)
+        }
+      }
+      if (parts.length) contents.push({ role: 'model', parts })
+      continue
+    }
+    if (m.role === 'tool') {
+      const idx = pending.indexOf(m.name)
+      if (idx !== -1) {
+        pending.splice(idx, 1)
+        let parsed
+        try { parsed = JSON.parse(m.content ?? '') } catch { parsed = { result: String(m.content ?? '') } }
+        contents.push({ role: 'user', parts: [{ functionResponse: { name: m.name, response: parsed } }] })
+      }
+      continue
+    }
+    const last = contents[contents.length - 1]
+    const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')
+    if (last && last.role === 'user' && last.parts?.[0] && !last.parts[0].functionResponse) {
+      last.parts[0].text = (last.parts[0].text || '') + (last.parts[0].text ? '\n\n' : '') + text
+    } else {
+      contents.push({ role: 'user', parts: [{ text }] })
+    }
+  }
   const system = messages.find((m) => m.role === 'system')?.content
-  const body = { contents, ...(system ? { system_instruction: { parts: [{ text: system }] } } : {}) }
+  const body = {
+    contents,
+    ...(system ? { system_instruction: { parts: [{ text: system }] } } : {}),
+    ...(toGeminiTools(options.tools) ? { tools: toGeminiTools(options.tools) } : {}),
+  }
   const res = await fetchJson(
-    `https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent?key=${provider.key}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${modelForCall(provider, options)}:generateContent?key=${provider.key}`,
     { method: 'POST', headers, body: JSON.stringify(body) },
     CLOUD_TIMEOUT_MS
   )
-  const text = res.json?.candidates?.[0]?.content?.parts?.map((p) => p.text).filter(Boolean).join('') || ''
-  if (!res.ok && !text) {
+  const parts = res.json?.candidates?.[0]?.content?.parts || []
+  const text = parts.map((p) => p.text).filter(Boolean).join('')
+  const toolCalls = parts
+    .filter((p) => p.functionCall)
+    .map((p, i) => ({
+      id: `gcall_${Date.now()}_${i}`,
+      type: 'function',
+      function: { name: p.functionCall.name, arguments: typeof p.functionCall.args === 'string' ? p.functionCall.args : JSON.stringify(p.functionCall.args || {}) },
+    }))
+  if (!res.ok && !text && !toolCalls.length) {
     if (res.status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(res.text || '')) markBlocked('gemini')
     return { ok: false, error: `gemini ${res.status}: ${(res.text || '').slice(0, 200)}` }
   }
-  return { ok: true, provider: 'gemini', model: provider.model, content: text, toolCalls: null }
+  return { ok: true, provider: 'gemini', model: provider.model, content: text, toolCalls: toolCalls.length ? toolCalls : null }
+}
+
+/** يجهّز سلسلة JSON أو يعيد كائن فارغًا — محمي ضد المدخلات الخاطئة */
+function safeJson(str) {
+  try { return JSON.parse(str) } catch { return {} }
 }
 
 async function cloudAnthropic(provider, options, messages, headers) {
@@ -318,9 +391,9 @@ async function streamNdjson(url, options, body, handle, externalSignal) {
 }
 
 /**
- * بث حروف ردّ (chat): أولوية الجودة المتسلسلة — نجرّب أقوى المزوّدات أولًا،
- * لكلٍّ مهلة "حق بداية" حتى يُرسل أول حرف؛ فإن لم يفعل ننتقل للاحتياط التالي فورًا.
- * إن فشل الجميع نعود إلى Ollama المحلي.
+ * بث حروف ردّ (chat): سباق متوازٍ على المزوّدات السحابية —
+ * نطلقها كلها دفعةً واحدة، وأول من يُرسل أول حرف يفوز ويبثّ، والباقي يُقطع فورًا.
+ * إن لم يبدأ أي سحابة خلال المهلة نعود إلى Ollama المحلي.
  * onToken: يستقبل النص التزايدي. onDone(result): عند الانتهاء.
  */
 async function streamChat(options, onToken, onDone) {
@@ -328,57 +401,63 @@ async function streamChat(options, onToken, onDone) {
   const messages = normalizeMessages(options)
   const local = await ollamaIsAvailable()
   const cands = priorityProviders(withTools)
+  if (!cands.length) {
+    if (local) return streamOllama(options, messages, onToken, onDone)
+    return onDone?.({ ok: false, error: 'لا يوجد موفّر بث متاح' })
+  }
 
-  for (const [name, p] of cands) {
-    const ac = new AbortController()
-    let marked = false
-    let finished = false
-    let doneRes = null
-    let err = null
-    const mark = () => { if (!marked) { marked = true } }
-    const firstToken = new Promise((resolve) => {
-      streamCloud(name, p, options, messages, (t) => {
-        if (String(t).trim() && !finished) mark()
-        onToken(t)
-      }, ac.signal).then(
-        (res) => { doneRes = res; finished = true },
-        (e) => { err = e; finished = true }
-      )
-      const iv = setInterval(() => {
-        if (marked) { clearInterval(iv); resolve(); return }
-        if (!finished) return // ما زال يعمل — نمنحه حقوق البداية حتى المهلة
-        clearInterval(iv)
-        // انتهى قبل المهلة: إن نجح بنتيجة نعتبره فائزًا، وإن فشل فانتقل فورًا للتالي
-        if (doneRes?.ok && String(doneRes.content || '').trim()) mark()
-        resolve()
-      }, 30)
-      setTimeout(() => { clearInterval(iv); resolve() }, CLOUD_HEADSTART_MS)
-    })
-    await firstToken
+  const buffers = new Map()
+  const controllers = new Map()
+  const results = new Map()
+  let finishedCnt = 0
 
-    if (marked && (!finished || (doneRes && doneRes.content?.trim()))) {
-      // هذا المزوّد بدأ ويفوز بالرد — نمهل البث حتى يكتمل
-      while (!finished) await new Promise((r) => setTimeout(r, 30))
-      if (doneRes?.ok) {
-        if (onDone) onDone({ ...doneRes, streamed: true })
-        return
-      }
-    } else {
-      ac.abort()
-      markBlockedOnQuota(name, { error: String(err || '') })
-      if (finished && doneRes?.ok && doneRes.content?.trim()) {
-        // اكتمل قبل انتهاء المهلة رغمًا عنّا — نعتبره النتيجة
-        if (onDone) onDone({ ...doneRes, streamed: true })
-        return
-      }
+  const winner = await new Promise((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; resolve(null) }
+    }, CLOUD_HEADSTART_MS)
+    const win = (name) => {
+      if (!settled) { settled = true; clearTimeout(timer); resolve(name) }
     }
+    for (const [name, p] of cands) {
+      const ac = new AbortController()
+      controllers.set(name, ac)
+      buffers.set(name, [])
+      let got = false
+      const pms = streamCloud(name, p, options, messages, (t) => {
+        if (!String(t).trim()) return
+        buffers.get(name).push(t)
+        if (!got) { got = true; win(name) }
+      }, ac.signal).then(
+        (res) => (res?.ok ? res : { ...res, ok: true }),
+        (err) => {
+          if (/429|quota|RESOURCE_EXHAUSTED/i.test(String(err?.message || err))) markBlocked(name)
+          return { ok: false, error: String(err?.message || err) }
+        }
+      )
+      results.set(name, pms)
+      pms.then((res) => {
+        finishedCnt++
+        if (settled) return
+        if (res?.ok && String(res.content || '').trim()) win(name)
+        else if (finishedCnt >= cands.length) win(null)
+      })
+    }
+  })
+
+  if (!winner) {
+    for (const ac of controllers.values()) ac.abort()
+    if (local) return streamOllama(options, messages, onToken, onDone)
+    return onDone?.({ ok: false, error: 'لا يوجد موفّر بث متاح' })
   }
 
-  if (local) {
-    await streamOllama(options, messages, onToken, onDone)
-    return
-  }
-  if (onDone) onDone({ ok: false, error: 'لا يوجد موفّر بث متاح' })
+  for (const [name, ac] of controllers) if (name !== winner) ac.abort()
+  for (const t of buffers.get(winner)) onToken(t)
+  const res = await results.get(winner)
+  if (res?.ok) return onDone?.({ ...res, streamed: true })
+
+  if (local) return streamOllama(options, messages, onToken, onDone)
+  return onDone?.({ ok: false, error: String(res?.error || 'stream failed') })
 }
 
 async function streamCloud(name, p, options, messages, onToken, signal) {

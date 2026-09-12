@@ -1,7 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
-import dotenv from 'dotenv'
+import './lib/env.js'
 import rateLimit from 'express-rate-limit'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -13,8 +13,6 @@ import visionRoutes from './routes/vision.js'
 import deployRoutes from './routes/deploy.js'
 import brainRoutes from './routes/brain.js'
 import voiceRoutes, { ttsAvailable, isSttAvailable } from './routes/voice.js'
-
-dotenv.config()
 
 const app = express()
 

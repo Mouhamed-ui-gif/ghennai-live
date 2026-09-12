@@ -1,13 +1,11 @@
 import express from 'express'
-import dotenv from 'dotenv'
+import '../lib/env.js'
 import { execFile } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
-
-dotenv.config()
 
 const router = express.Router()
 

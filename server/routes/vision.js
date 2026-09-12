@@ -1,10 +1,8 @@
 import express from 'express'
-import dotenv from 'dotenv'
+import '../lib/env.js'
 import { requireAuth } from './auth.js'
 import { emitUser } from '../lib/events.js'
 import { audit } from '../lib/auditLog.js'
-
-dotenv.config()
 
 const router = express.Router()
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434'
