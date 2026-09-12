@@ -130,17 +130,17 @@ export function CodingMode() {
     let newBlobs: string[] = []
     try {
       const { tree: fullTree } = await workspace.tree()
-      const base = findIndexBase(fullTree) || firstDir(fullTree) || null
+      const rootHasIndex = fullTree.some((n: FileNode) => n.type === 'file' && /^index\.html?$/.test(n.name))
+      const base = rootHasIndex ? null : findIndexBase(fullTree) || firstDir(fullTree) || null
       const { tree: sub } = base ? await workspace.tree(base) : { tree: fullTree }
       const files: { rel: string; content: string }[] = []
-      const walk = async (list: FileNode[], prefix = '') => {
+      const walk = async (list: FileNode[], _prefix = '') => {
         for (const f of list) {
           if (f.type === 'dir') await walk(f.children || [], f.rel || f.path)
           else {
             if (/node_modules|\.git|dist[\\/]/.test(f.path)) continue
             try {
-              const fullRel = base ? `${base}/${f.path}` : f.path
-              const d = await workspace.read(fullRel)
+              const d = await workspace.read(f.path)
               if (typeof d.content === 'string' && d.content.length <= 300000) files.push({ rel: f.rel || f.path, content: d.content })
             } catch { /* noop */ }
           }
@@ -152,7 +152,7 @@ export function CodingMode() {
         newBlobs.push(URL.createObjectURL(new Blob([f.content], { type: mimeFor(f.rel) })))
       }
       const map = new Map(files.map((f, i) => [norm(f.rel), newBlobs[i]]))
-      const idx = files.find((f) => /^(index\.html?)$/.test(norm(f.rel)))
+      const idx = files.find((f) => /^index\.html?$/.test(norm(f.rel))) || files.find((f) => /\/index\.html?$/.test(norm(f.rel)))
       if (idx) {
         const dir = idx.rel.replace(/[^/]*$/, '')
         const resolveRel = (p: string) => (p.startsWith('/') ? norm(p) : norm(dir + p))

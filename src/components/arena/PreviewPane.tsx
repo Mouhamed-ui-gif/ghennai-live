@@ -64,17 +64,17 @@ export function PreviewPane() {
     try {
       const scope = useApp.getState().projectName && useApp.getState().projectName !== 'project' ? useApp.getState().projectName : null
       const { tree: fullTree } = scope ? await workspace.tree(scope) : await workspace.tree()
-      const base = scope || findIndexBase(fullTree) || firstDir(fullTree) || null
+      const rootHasIndex = !scope && fullTree.some((n: FileNode) => n.type === 'file' && /^index\.html?$/.test(n.name))
+      const base = scope || (rootHasIndex ? null : findIndexBase(fullTree) || firstDir(fullTree) || null)
       const { tree: sub } = base ? await workspace.tree(base) : { tree: fullTree }
       const files: { rel: string; content: string }[] = []
-      const walk = async (list: FileNode[], prefix = '') => {
+      const walk = async (list: FileNode[], _prefix = '') => {
         for (const f of list) {
           if (f.type === 'dir') await walk(f.children || [], f.rel || f.path)
           else {
             if (/node_modules|\.git|dist[\\/]/.test(f.path)) continue
             try {
-              const fullRel = base ? `${base}/${f.path}` : f.path
-              const d = await workspace.read(fullRel)
+              const d = await workspace.read(f.path)
               if (typeof d.content === 'string' && d.content.length <= 300000) files.push({ rel: f.rel || f.path, content: d.content })
             } catch { /* noop */ }
           }
@@ -87,7 +87,7 @@ export function PreviewPane() {
         newBlobs.push(b)
       }
       const map = new Map(files.map((f, i) => [norm(f.rel), newBlobs[i]]))
-      const idx = files.find((f) => /^(index\.html?)$/.test(norm(f.rel)))
+      const idx = files.find((f) => /^index\.html?$/.test(norm(f.rel))) || files.find((f) => /\/index\.html?$/.test(norm(f.rel)))
       if (!idx) {
         setDoc(null)
         setStatus(base ? `لا يوجد index.html في «${base}» بعد — الوكيل لا يزال يكتب…` : 'لا ملفات بعد…')

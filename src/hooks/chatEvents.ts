@@ -65,7 +65,9 @@ export function handleChatEvent(e: SSEvent): void {
         st.upsertCodeFile(String(ev.path))
       }
       if (st.projectName === 'project' && ev.path) {
-        const first = String(ev.path).split('/')[0]
+        const p = String(ev.path)
+        const slash = p.indexOf('/')
+        const first = slash > 0 ? p.slice(0, slash) : null
         if (first && !first.startsWith('_') && first !== 'uploads' && !ev.repaired) {
           st.openArena(first)
         }
