@@ -1,0 +1,117 @@
+import type { SSEvent } from '../api/client'
+import { useApp } from '../store/app'
+import { workspace } from '../api/client'
+import { speakText, voiceFor } from '../components/dashboard/voice'
+
+export async function refreshTree(): Promise<void> {
+  try {
+    const d = await workspace.tree()
+    useApp.getState().setFiles(d.tree as never)
+  } catch {
+    /* noop */
+  }
+}
+
+const uiLang = () => (document.documentElement.lang === 'ar' ? 'ar' : 'en')
+
+/** المعالج المشترك لكل أحداث الدفق — يستخدمه لوحة الدردشة ووضع البرمجة معًا */
+export function handleChatEvent(e: SSEvent): void {
+  switch (e.type) {
+    case 'coding_start': {
+      const ev = e as unknown as { project?: string; request?: string; mode?: string; element?: unknown }
+      const st = useApp.getState()
+      st.enterCodingMode(ev.project || 'الموقع الجديد', ev.mode === 'edit' ? 'edit' : 'build', ev.request || '')
+      st.pushCodeAction({ kind: 'notice', text: ev.mode === 'edit' ? `✂️ ${ev.request?.slice(0, 140) || 'تعديل عنصر'}` : `⏺ بدء بناء «${ev.project}»` })
+      if (ev.mode === 'edit' && ev.element) st.setEditTarget(ev.element as { tag: string; id: string; className: string; text: string; href?: string | null; src?: string | null })
+      st.pushActivity({ agent: 'Coding', message: ev.mode === 'edit' ? '✂️ تعديل عنصر محدد' : `⏺ يبدأ بناء «${ev.project}»`, status: 'running' })
+      if (st.codingVoice) speakText('بسْمِ الله، بدأْتُ العملَ الآن — ستَرى الكودَ يُكتبُ أمامَك حرفًا بحرف', uiLang(), undefined, voiceFor('Coding'))
+      break
+    }
+    case 'code_token': {
+      const ev = e as unknown as { content?: string; file?: string | null; action?: string }
+      useApp.getState().codeToken({ content: ev.content ?? null, file: ev.file ?? null, action: ev.action ?? null })
+      break
+    }
+    case 'agent_event': {
+      const ev = e as unknown as { agent: string; tool?: string; message?: string; status?: string }
+      const st = useApp.getState()
+      if (ev.agent === 'Coding') {
+        st.openArena(st.projectName || 'project')
+        if (ev.tool) {
+          const t = (ev.message as string) || ''
+          if (t.startsWith('▶️')) st.pushCodeAction({ kind: 'cmd', text: t.replace('▶️ ', '').replace(/^\$ /, '') })
+          if (t.startsWith('✅')) st.pushCodeAction({ kind: 'ok', text: t.replace('✅ ', '') })
+        }
+      }
+      if (ev.agent === 'Coding' && ev.tool && (ev.message || '').startsWith('▶️')) {
+        st.setTermOpen(true)
+        st.pushTerm({ kind: 'cmd', text: (ev.message as string).replace('▶️ ', '') + '\n' })
+      }
+      if (ev.agent === 'Coding' && ev.status === 'success' && ev.tool) {
+        st.pushTerm({ kind: 'out', text: `✓ ${(ev.message as string).replace('✅ ', '')}\n` })
+      }
+      break
+    }
+    case 'terminal_data': {
+      const ev = e as unknown as { kind: string; data: string }
+      const kind = ev.kind === 'err' ? 'err' : ev.kind === 'cmd' ? 'cmd' : 'out'
+      useApp.getState().pushTerm({ kind, text: String(ev.data || '') })
+      break
+    }
+    case 'workspace_changed': {
+      const ev = e as unknown as { path?: string; repaired?: boolean }
+      const st = useApp.getState()
+      if (st.codingOpen && ev.path && /\.(html?|css|js|mjs|json|svg)$/i.test(String(ev.path)) && !ev.repaired) {
+        st.upsertCodeFile(String(ev.path))
+      }
+      if (st.projectName === 'project' && ev.path) {
+        const first = String(ev.path).split('/')[0]
+        if (first && !first.startsWith('_') && first !== 'uploads' && !ev.repaired) {
+          st.openArena(first)
+        }
+      }
+      void refreshTree()
+      st.bumpPreview()
+      break
+    }
+    case 'coding_done': {
+      const ev = e as unknown as { built?: boolean }
+      const st = useApp.getState()
+      st.setCodingDone(!!ev.built)
+      st.setBuilt(!!ev.built)
+      st.pushCodeAction({ kind: 'ok', text: ev.built ? 'اكتمل البناء ✓' : 'انتهت المهمة ✓' })
+      st.pushActivity({ agent: 'Coding', message: ev.built ? '✅ اكتمل البناء ونُنشر عند الطلب' : '✅ انتهت المهمة', status: 'success' })
+      if (st.codingVoice && st.codingOpen) {
+        speakText(ev.built ? 'تمّتِ المهمةُ بنجاح — موقعُك أصبحَ جاهزًا الآن، وبإمكانِكَ نشره برابطٍ دائم' : 'انتهيتُ من العملِ بنجاح', uiLang(), undefined, voiceFor('Coding'))
+      }
+      void refreshTree()
+      st.bumpPreview()
+      setTimeout(() => refreshTree(), 3000)
+      break
+    }
+    case 'stream_chunk': {
+      const ev = e as unknown as { content?: string }
+      if (ev.content) useApp.getState().addStreamChunk(ev.content)
+      break
+    }
+    case 'answer': {
+      const ev = e as unknown as { content: string; agent?: string }
+      useApp.getState().addFinalMessage(ev.content || '', ev.agent)
+      const prefs = useApp.getState().prefs
+      if (prefs.speechOut && ev.content && !/^\s*⚠/.test(ev.content)) {
+        speakText(ev.content, uiLang(), undefined, voiceFor(ev.agent || ''))
+      }
+      break
+    }
+    case 'error': {
+      const ev = e as unknown as { error: string }
+      const st = useApp.getState()
+      if (st.codingOpen) st.setCodingError(ev.error || 'خطأ غير متوقع')
+      st.addAssistantMsg('⚠️ ' + (ev.error || 'خطأ غير متوقع'))
+      st.pushToast({ kind: 'error', title: 'خطأ', message: (ev.error || 'حدث خطأ غير متوقع').slice(0, 140) })
+      break
+    }
+    default:
+      break
+  }
+}

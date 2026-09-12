@@ -9,6 +9,40 @@ import { seedTemplates } from '../lib/templateKit.js'
 import { repairUserSites } from '../lib/siteDoctor.js'
 
 const MAX_ITERATIONS = 12
+const MAX_TYPED_CHARS = 30000
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+function detectProjectName(msg) {
+  const m = String(msg || '').match(/["'“”«»]([^"'“”«»]{2,40})["'“”«»]/)
+  return m ? m[1] : 'الموقع الجديد'
+}
+
+/** بث النص على شكل أحرف تُكتب حيّاً أمام المستخدم (code_token) */
+async function* yieldTyped(text, opts = {}) {
+  const s = String(text ?? '').slice(0, MAX_TYPED_CHARS)
+  const chunk = opts.chunk || 60
+  const rate = opts.rate || 8
+  for (let i = 0; i < s.length; i += chunk) {
+    yield { type: 'code_token', content: s.slice(i, i + chunk), file: opts.file || null }
+    await sleep(rate)
+  }
+}
+
+const EDIT_SYSTEM_PROMPT = (element, userMessage) => `You are GHENNAI's Coding Agent in EDIT MODE — a precise surgeon for the user's live website. The user clicked an element in their preview and asked for a targeted change.
+
+ELEMENT CLICKED (inspect it in the source files):
+${JSON.stringify(element || {})}
+
+USER'S REQUESTED CHANGE:
+${userMessage}
+
+INSTRUCTIONS:
+1. Read the relevant source file(s) (index.html / style.css / app.js in the workspace root) to find the exact code that renders this element. Match by tag name, id, class, or the element's visible text/content.
+2. Make ONLY the requested change using the replaceInFile tool with the exact current text you found via readFile. Never rewrite whole files, never restructure the site. Keep edits minimal and surgical.
+3. Verify with readFile that the change landed correctly.
+4. Reply with a one-line Arabic confirmation: what changed and where (file + element).
+If the change is not feasible, say exactly why and suggest the closest alternative.`
 
 const SYSTEM_PROMPT = `You are GHENNAI's autonomous Coding Agent — a senior full-stack product engineer. You build PROFESSIONAL, production-grade websites inside the user's workspace.
 
@@ -104,10 +138,28 @@ const TOOL_SCHEMAS = [
       },
     },
   },
+{
+    type: 'function',
+    function: {
+      name: 'replaceInFile',
+      description:
+        "Replace a specific text snippet inside an existing file with a new text — for precise surgical edits (e.g. change one element's color/text on the live site). Returns how many occurrences were replaced.",
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative path from workspace root' },
+          old: { type: 'string', description: 'Exact existing text to replace (must match the file content exactly)' },
+          new: { type: 'string', description: 'New text to put in its place' },
+          replaceAll: { type: 'boolean', description: 'Replace every occurrence (default false = first occurrence only)' },
+        },
+        required: ['path', 'old', 'new'],
+      },
+    },
+  },
 ]
 
 function toolSchemaMap() {
-  return { writeFile: 'filesystem', readFile: 'filesystem', listDir: 'filesystem', runTerminal: 'terminal' }
+  return { writeFile: 'filesystem', readFile: 'filesystem', listDir: 'filesystem', replaceInFile: 'filesystem', runTerminal: 'terminal' }
 }
 
 /** فحص وإصلاح مواقع ناقصة بعد انتهاء البناء — يخطّر الواجهة بتحديث المعاينة */
@@ -133,6 +185,8 @@ function toCallParams(name, args) {
       return { action: 'readFile', path: args.path }
     case 'listDir':
       return { action: 'listDir', path: args.path || '.' }
+    case 'replaceInFile':
+      return { action: 'replaceInFile', path: args.path, old: args.old, new: args.new, replaceAll: !!args.replaceAll }
     case 'runTerminal':
       return { command: args.command, cwd: args.cwd || '.' }
     default:
@@ -167,6 +221,9 @@ async function runTool(user, name, args, onTerm) {
     if (agentTool === 'filesystem' && params.action === 'writeFile' && result.ok) {
       emitUser(user.email, { type: 'workspace_changed', path: params.path, action: 'write' })
     }
+    if (agentTool === 'filesystem' && params.action === 'replaceInFile' && result.ok) {
+      emitUser(user.email, { type: 'workspace_changed', path: params.path, action: 'patch', offset: result.offset, replaced: result.replaced })
+    }
     if (agentTool === 'filesystem' && ['readFile', 'listDir', 'tree'].includes(params.action)) {
       return { ok: true, toolResult: JSON.stringify(result).slice(0, 3000) }
     }
@@ -177,15 +234,30 @@ async function runTool(user, name, args, onTerm) {
   }
 }
 
-async function* runCoding(user, userMessage) {
+async function* runCoding(user, userMessage, opts = {}) {
   const ws = userWorkspace(user.email)
   await seedTemplates(user.email)
-  const memory = contextBlock(user.email, userMessage)
-  const messages = [
-    { role: 'system', content: SYSTEM_PROMPT + memory },
-    { role: 'user', content: `Workspace root: ${ws}\n\nUser request: ${userMessage}\n\nTemplate folder "_ghennai/templates" already exists in the workspace. Use the tools to complete it. When done, reply with the final summary.` + `
-(ملاحظة نظام: إذا سُئلت من صنعك / من الذي صنعك / من برمجك / who created you؟ فأجب أن صانعك هو **محمد غناي (Mohamed Ghennay)** المطوّر الوحيد لـ GHENNAI.)` },
-  ]
+  const editMode = opts?.mode === 'edit'
+  const memory = editMode ? '' : contextBlock(user.email, userMessage)
+  const messages = []
+  if (editMode) {
+    yield { type: 'coding_start', project: detectProjectName(userMessage), request: userMessage, mode: 'edit', element: opts.element || null }
+    messages.push({ role: 'system', content: EDIT_SYSTEM_PROMPT(opts.element || null, userMessage) })
+    messages.push({
+      role: 'user',
+      content: `Workspace root: ${ws}\n\nThe user clicked this element in their live preview and wants this change applied.\nRead the source files first, then use replaceInFile (or writeFile as a last resort). Verify before replying.`,
+    })
+  } else {
+    yield { type: 'coding_start', project: detectProjectName(userMessage), request: userMessage, mode: 'build' }
+    messages.push(
+      { role: 'system', content: SYSTEM_PROMPT + memory },
+      {
+        role: 'user',
+        content: `Workspace root: ${ws}\n\nUser request: ${userMessage}\n\nTemplate folder "_ghennai/templates" already exists in the workspace. Use the tools to complete it. When done, reply with the final summary.` +
+          `\n(ملاحظة نظام: إذا سُئلت من صنعك / من الذي صنعك / من برمجك / who created you؟ فأجب أن صانعك هو **محمد غناي (Mohamed Ghennay)** المطوّر الوحيد لـ GHENNAI.)`,
+      },
+    )
+  }
 
   let built = false
   let attempts = 0
@@ -194,21 +266,38 @@ async function* runCoding(user, userMessage) {
     try {
       res = await generate({ messages, tools: TOOL_SCHEMAS })
     } catch (err) {
-      yield { type: 'agent', agent: 'Coding', message: `خطأ في النموذج: ${err.message}`, status: 'error' }
-      yield { type: 'answer', content: `تعذّر تنفيذ المهمة بسبب خطأ النموذج: ${err.message}` }
-      return
+      let recovered = null
+      for (let attempt = 0; attempt < 2 && !recovered; attempt++) {
+        yield { type: 'agent', agent: 'Coding', message: `انقطاع مؤقت في المزوّد — إعادة المحاولة (${attempt + 1}/2)…`, status: 'retry' }
+        await sleep(1500 * (attempt + 1))
+        try { recovered = await generate({ messages, tools: TOOL_SCHEMAS }) } catch { /* noop */ }
+      }
+      if (recovered) {
+        res = recovered
+      } else {
+        yield { type: 'code_token', action: 'done' }
+        yield { type: 'agent', agent: 'Coding', message: `خطأ في النموذج: ${err.message}`, status: 'error' }
+        yield { type: 'answer', content: `تعذّر تنفيذ المهمة بسبب خطأ النموذج: ${err.message}` }
+        return
+      }
     }
 
     const toolCalls = res.toolCalls || []
     if (!toolCalls.length) {
       runRepairs(user)
-      yield { type: 'coding_done', built: built || attempts > 0, content: res.content }
+      if (res.content) yield* yieldTyped(res.content, { rate: 5, chunk: 120 })
+      yield { type: 'code_token', action: 'done' }
+      yield { type: 'coding_done', built: built || attempts > 0, content: res.content || '' }
       yield { type: 'answer', content: res.content || 'انتهت المهمة.' }
       rememberProject(user.email, 'last', { summary: String(res.content).slice(0, 400), ts: Date.now() })
       return
     }
 
     messages.push({ role: 'assistant', content: res.content || '', tool_calls: toolCalls })
+    if (res.content) {
+      yield* yieldTyped(res.content, { rate: 6, chunk: 100 })
+      await sleep(100)
+    }
 
     let allOk = true
     for (const tc of toolCalls) {
@@ -217,12 +306,19 @@ async function* runCoding(user, userMessage) {
       if (typeof args === 'string') {
         try { args = JSON.parse(args) } catch { args = {} }
       }
+      if (name === 'writeFile' && args?.content) {
+        yield { type: 'code_token', action: 'open', file: args.path }
+        await sleep(120)
+        yield* yieldTyped(args.content, { file: args.path, rate: 3, chunk: 220 })
+      } else if (name === 'replaceInFile') {
+        yield { type: 'code_token', action: 'edit', file: args.path }
+        await sleep(80)
+      }
       const result = await runTool(user, name, args || {}, (kind, chunk) => {
         emitUser(user.email, { type: 'terminal_data', kind, data: chunk })
       })
       if (!result.ok) allOk = false
-      else if (name === 'runTerminal') built = true
-      else if (name === 'writeFile') built = true
+      else if (name === 'runTerminal' || name === 'writeFile') built = true
       attempts++
       messages.push({ role: 'tool', tool_call_id: tc.id, name, content: JSON.stringify({ ok: result.ok, ...result }).slice(0, 3000) })
     }
@@ -230,6 +326,7 @@ async function* runCoding(user, userMessage) {
   }
 
   runRepairs(user)
+  yield { type: 'code_token', action: 'done' }
   yield { type: 'coding_done', built, content: 'تم الوصول للحد الأقصى من الخطوات.' }
   yield { type: 'agent', agent: 'Coding', message: 'الوصول إلى الحد الأقصى من الخطوات — التوقف.', status: 'error' }
   yield { type: 'answer', content: 'تم الوصول إلى الحد الأقصى لخطوات التنفيذ. تحقق من مساحة العمل لمعرفة ما تم إنجازه.' }

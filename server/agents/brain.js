@@ -605,6 +605,27 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
   try {
     if (prefs.paused) throw new PausedError('⏸️ الوكلاء متوقفون مؤقتًا')
 
+    // ── وضع التعديل: عنصر نُقر عليه في المعاينة — يُعدِّله وكيل البرمجة جراحيًّا ──
+    if (mode && mode.edit) {
+      const elem = mode.edit.element
+      setStatus(email, 'Coding', 'running', 'يُعدّل العنصر المحدد…')
+      feed(email, 'Coding', '—', `✂️ تعديل العنصر ${elem?.tag ? `<${elem.tag}>` : 'المحدد'} — ${userMessage.slice(0, 120)}`, 'edit')
+      setProgress(email, 25, 'editing')
+      let out = ''
+      for await (const ev of runCoding(user, userMessage, { mode: 'edit', element: elem })) {
+        if (ev.type === 'answer') out = ev.content
+        yield ev
+      }
+      record(email, { role: 'assistant', content: out || 'تم التعديل.' }, 'Coding', sessionId)
+      agentMemory(email, 'Coding', 'assistant', (out || 'تم التعديل.').slice(0, 1500))
+      setProgress(email, 100, 'done')
+      stageAllIdle(email)
+      emitBrain(email)
+      setStatus(email, 'Coding', 'done', 'اكتمل التعديل ✓')
+      yield { type: 'answer', agent: 'Coding', content: out || 'تم التعديل.' }
+      return
+    }
+
     // القاعدة الحديدية: وكيل صريح يلتقي طلبًا خارج اختصاصه → اعتذار لطيف + إحالة فورية
     if (explicitAgent && requested && !mode.refresh) {
       const defer = maybeDefer(String(requested), userMessage)

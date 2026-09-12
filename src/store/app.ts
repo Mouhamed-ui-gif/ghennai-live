@@ -33,6 +33,31 @@ export interface TermLine {
   text: string
   ts: number
 }
+export interface CodeAction {
+  id: string
+  ts: number
+  kind: 'cmd' | 'ok' | 'info' | 'err' | 'edit' | 'notice'
+  text: string
+}
+export interface EditElement {
+  tag: string
+  id: string
+  className: string
+  text: string
+  href?: string | null
+  src?: string | null
+}
+export interface CodingShot {
+  project: string
+  mode: 'build' | 'edit'
+  request: string
+  running: boolean
+  done: boolean
+  error: string | null
+  built: boolean
+  typed: { file: string | null; text: string } | null
+  actions: CodeAction[]
+}
 export interface BrainAgentState {
   status: string
   action: string
@@ -105,6 +130,15 @@ interface AppState {
   deployUrl: string | null
   deployError: string | null
   deployStages: string[]
+
+  codingOpen: boolean
+  codingVoice: boolean
+  codingShot: CodingShot | null
+  codeFiles: { path: string }[]
+  activeCodeFile: string | null
+  codeFileContent: string | null
+  editTarget: EditElement | null
+  editBusy: boolean
 
   brainOpen: boolean
   sessionsOpen: boolean
@@ -183,6 +217,19 @@ interface AppState {
   setDeployState: (s: AppState['deployState'], url?: string | null, err?: string | null) => void
   pushDeployStage: (m: string) => void
   clearDeploy: () => void
+
+  enterCodingMode: (project: string, mode: 'build' | 'edit', request: string) => void
+  exitCodingMode: () => void
+  setCodingVoice: (b: boolean) => void
+  codeToken: (chunk: { content?: string | null; file?: string | null; action?: string | null }) => void
+  pushCodeAction: (a: Omit<CodeAction, 'id' | 'ts'>) => void
+  setCodingDone: (built: boolean) => void
+  setCodingError: (msg: string) => void
+  upsertCodeFile: (p: string) => void
+  setActiveCodeFile: (p: string | null) => void
+  setCodeFileContent: (c: string | null) => void
+  setEditTarget: (e: EditElement | null) => void
+  setEditBusy: (b: boolean) => void
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10)
@@ -211,6 +258,15 @@ export const useApp = create<AppState>((set, get) => ({
   deployUrl: null,
   deployError: null,
   deployStages: [],
+
+  codingOpen: false,
+  codingVoice: true,
+  codingShot: null,
+  codeFiles: [],
+  activeCodeFile: null,
+  codeFileContent: null,
+  editTarget: null,
+  editBusy: false,
 
   brainOpen: false,
   sessionsOpen: false,
@@ -260,6 +316,7 @@ export const useApp = create<AppState>((set, get) => ({
     set({
       user: null, token: null, msgs: [], arenaOpen: false, activity: [],
       termLines: [], previewUrl: null, deployState: 'idle', deployUrl: null,
+      codingOpen: false, codingShot: null, codeFiles: [], activeCodeFile: null, codeFileContent: null, editTarget: null, editBusy: false,
       brainOpen: false, sessionsOpen: false, resumeText: null, resumeTitle: null, brainBoard: {}, brainProgress: 0, brainPhase: 'idle', brainFeed: [], brainPaused: false,
 prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', speechOut: false, paused: false, interval: 0, team: true, models: {} },
     })
@@ -269,7 +326,7 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
     try {
       localStorage.removeItem('ghn_msgs')
     } catch { /* noop */ }
-    set({ msgs: [], activity: [], arenaOpen: false, termOpen: false, termLines: [], previewUrl: null, deployState: 'idle' })
+    set({ msgs: [], activity: [], arenaOpen: false, termOpen: false, termLines: [], previewUrl: null, deployState: 'idle', codingOpen: false, codingShot: null, codeFiles: [], editTarget: null, editBusy: false })
   },
 
   setBrainOpen: (b) => set({ brainOpen: b }),
@@ -416,6 +473,67 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
   setDeployState: (st, url = null, err = null) => set({ deployState: st, deployUrl: url, deployError: err }),
   pushDeployStage: (m) => set((s) => ({ deployStages: [...s.deployStages, m] })),
   clearDeploy: () => set({ deployState: 'idle', deployUrl: null, deployError: null, deployStages: [] }),
+
+  enterCodingMode: (project, mode, request) =>
+    set((s) => ({
+      codingOpen: true,
+      codingShot: {
+        project: project || s.codingShot?.project || 'الموقع الجديد',
+        mode: mode ?? s.codingShot?.mode ?? 'build',
+        request: request || s.codingShot?.request || '',
+        running: true,
+        done: false,
+        error: null,
+        built: false,
+        typed: null,
+        actions: s.codingShot?.actions?.slice(-60) || [],
+      },
+    })),
+
+  exitCodingMode: () => set({ codingOpen: false }),
+
+  setCodingVoice: (b) => set({ codingVoice: b }),
+
+  codeToken: (chunk) =>
+    set((s) => {
+      if (!s.codingShot) return {}
+      const shot = s.codingShot
+      if (chunk.action === 'open' || chunk.action === 'edit') {
+        return { codingShot: { ...shot, typed: { file: chunk.file || null, text: '' }, error: null } }
+      }
+      if (chunk.action === 'done') {
+        return { codingShot: { ...shot, typed: null } }
+      }
+      return {
+        codingShot: {
+          ...shot,
+          typed: { file: chunk.file ?? shot.typed?.file ?? null, text: (shot.typed?.text || '') + (chunk.content || '') },
+        },
+      }
+    }),
+
+  pushCodeAction: (a) =>
+    set((s) => (s.codingShot ? { codingShot: { ...s.codingShot, actions: [...s.codingShot.actions, { id: uid(), ts: Date.now(), ...a }].slice(-60) } } : {})),
+
+  setCodingDone: (built) =>
+    set((s) => (s.codingShot ? { codingShot: { ...s.codingShot, running: false, done: true, typed: null, built } } : {})),
+
+  setCodingError: (msg) =>
+    set((s) => (s.codingShot ? { codingShot: { ...s.codingShot, running: false, error: msg, typed: null } } : {})),
+
+  upsertCodeFile: (p) =>
+    set((s) => ({
+      codeFiles: s.codeFiles.some((f) => f.path === p) ? s.codeFiles : [...s.codeFiles, { path: p }].slice(-40),
+      activeCodeFile: s.activeCodeFile || p,
+    })),
+
+  setActiveCodeFile: (p) => set({ activeCodeFile: p, codeFileContent: null }),
+
+  setCodeFileContent: (c) => set({ codeFileContent: c }),
+
+  setEditTarget: (e) => set({ editTarget: e, editBusy: false }),
+
+  setEditBusy: (b) => set({ editBusy: b }),
 }))
 
 if (typeof window !== 'undefined' && window.location?.hostname === 'localhost') {

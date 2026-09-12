@@ -29,7 +29,7 @@ router.get('/events', (req, res, next) => {
 })
 
 router.post('/chat', requireAuth, chatLimiter, async (req, res) => {
-  const { message, agent } = req.body
+  const { message, agent, edit } = req.body
   if (!message) return res.status(400).json({ error: 'Message required' })
   const user = { email: req.user.email, name: req.user.name, history: req.history || [] }
 
@@ -53,7 +53,7 @@ router.post('/chat', requireAuth, chatLimiter, async (req, res) => {
     // كل حدث يُبث للمستخدم (أدوات/طرفية/نشاط) يصل أيضًا لجلسة هذا الطلب
     unbind = bindRequestStream(user.email, send)
 
-    for await (const event of handleRequest(user, message, agent)) {
+    for await (const event of handleRequest(user, message, agent, edit ? { edit } : {})) {
       if (res.writableEnded) break
       send(event)
       if (event.type === 'answer') {

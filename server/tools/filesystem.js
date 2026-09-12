@@ -27,6 +27,20 @@ const filesystem = {
     return { ok: true, path: filePath }
   },
 
+  async replaceInFile({ workspace, path: filePath, old: oldText, new: newText, replaceAll = false }) {
+    const abs = ensureInWorkspace(workspace, filePath)
+    if (!fs.existsSync(abs)) return { ok: false, error: 'الملف غير موجود' }
+    const oldStr = oldText ?? ''
+    const newStr = newText ?? ''
+    if (oldStr === '') return { ok: false, error: 'old مطلوب — يجب تحديد النص المراد استبداله' }
+    const content = fs.readFileSync(abs, 'utf-8')
+    const count = content.split(oldStr).length - 1
+    if (count === 0) return { ok: false, error: 'النص المطلوب تغييره غير موجود في الملف — اقرأ الملف أولاً ثم استخدم النص الحرفي الموجود' }
+    const updated = replaceAll ? content.split(oldStr).join(newStr) : content.replace(oldStr, newStr)
+    fs.writeFileSync(abs, updated, 'utf-8')
+    return { ok: true, path: filePath, replaced: count, offset: content.indexOf(oldStr) }
+  },
+
   async deleteFile({ workspace, path: filePath }) {
     const abs = ensureInWorkspace(workspace, filePath)
     fs.rmSync(abs, { force: true })

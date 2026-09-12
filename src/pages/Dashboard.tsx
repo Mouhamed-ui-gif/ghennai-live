@@ -18,6 +18,7 @@ import { Menu, LogOut, Loader2 } from 'lucide-react'
 const ArenaWorkbench = lazy(() => import('../components/arena/ArenaWorkbench').then((m) => ({ default: m.ArenaWorkbench })))
 const BrainPanel = lazy(() => import('../components/dashboard/BrainPanel').then((m) => ({ default: m.BrainPanel })))
 const SessionsPanel = lazy(() => import('../components/dashboard/SessionsPanel').then((m) => ({ default: m.SessionsPanel })))
+const CodingMode = lazy(() => import('../components/coding/CodingMode').then((m) => ({ default: m.CodingMode })))
 
 function useIsDesktop() {
   const [d, setD] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width:1024px)').matches)
@@ -45,6 +46,7 @@ export function Dashboard() {
   const user = useApp((s) => s.user)
   const agent = useApp((s) => s.agent)
   const zen = useApp((s) => s.zen)
+  const codingOpen = useApp((s) => s.codingOpen)
   const isDesktop = useIsDesktop()
   const [sideOpen, setSideOpen] = useState(false)
   const mounted = useRef(false)
@@ -68,7 +70,10 @@ export function Dashboard() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey
       if (!mod) {
-        if (e.key === 'Escape' && zen) useApp.getState().setZen(false)
+        if (e.key === 'Escape') {
+          if (useApp.getState().codingOpen) useApp.getState().exitCodingMode()
+          else if (zen) useApp.getState().setZen(false)
+        }
         return
       }
       const k = e.key.toLowerCase()
@@ -82,6 +87,9 @@ export function Dashboard() {
         e.preventDefault()
         if (isDesktop) useApp.getState().setSideCollapsed(!useApp.getState().sideCollapsed)
         else setSideOpen((o) => !o)
+      } else if (k === 'c' && e.altKey) {
+        e.preventDefault()
+        useApp.getState().exitCodingMode()
       }
     }
     document.addEventListener('keydown', onKey)
@@ -111,6 +119,12 @@ export function Dashboard() {
     <div className="bg-animated relative flex h-screen w-full overflow-hidden">
       <WorldBackground agent={agent} />
       <StarDust color={AGENT_MAP[agent].color} density={14} />
+
+      {codingOpen && (
+        <Suspense fallback={<Fallback />}>
+          <CodingMode />
+        </Suspense>
+      )}
 
       {!zen && (
         <div className="absolute inset-x-0 top-0 z-40 flex items-center justify-between border-b border-white/5 bg-night-900/80 px-3 py-2 backdrop-blur-lg lg:hidden">
