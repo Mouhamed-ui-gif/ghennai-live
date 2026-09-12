@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
-import { Rocket, X, Loader2, Volume2, VolumeX, Pencil, Sparkles, RefreshCw } from 'lucide-react'
-import { useApp, type EditElement, type FileNode } from '../../store/app'
-import { workspace, chatStream, deploy } from '../../api/client'
+import { Rocket, X, Loader2, Volume2, VolumeX, Pencil, Sparkles, RefreshCw, Monitor, Tablet, Smartphone, Undo2, ExternalLink } from 'lucide-react'
+import { useApp, type EditElement, type FileNode, type ProjectInfo } from '../../store/app'
+import { workspace, chatStream, deploy, projects as projectsApi } from '../../api/client'
 import { handleChatEvent } from '../../hooks/chatEvents'
 import { speakText, voiceFor } from '../dashboard/voice'
 
@@ -104,6 +104,7 @@ function rewriteHtml(html: string, map: Map<string, string>, norm: (p: string) =
 
 const dirOf = (p: string) => (p.includes('/') ? p.split('/').slice(0, -1).join('/') || '.' : '.')
 const extLang = (p: string) => (p.endsWith('.css') ? 'css' : p.endsWith('.js') || p.endsWith('.mjs') ? 'javascript' : 'html')
+const escapeRE = (s: string) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 export function CodingMode() {
   const shot = useApp((s) => s.codingShot)
@@ -114,6 +115,8 @@ export function CodingMode() {
   const editTarget = useApp((s) => s.editTarget)
   const editBusy = useApp((s) => s.editBusy)
   const variant = useApp((s) => s.previewVariant)
+  const previewDevice = useApp((s) => s.previewDevice)
+  const activeProject = useApp((s) => s.activeProject)
 
   const [doc, setDoc] = useState<string | null>(null)
   const [pdStatus, setPdStatus] = useState('جارٍ بناء المعاينة…')
@@ -124,6 +127,31 @@ export function CodingMode() {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const blobsRef = useRef<string[]>([])
   const logRef = useRef<HTMLDivElement | null>(null)
+  const docsRef = useRef<Map<string, string>>(new Map())
+
+  const locateElement = (el: EditElement): { file: string; line: number | null } => {
+    let content: string | null = docsRef.current.get('index.html') ?? null
+    if (!content) {
+      const hit = [...docsRef.current.entries()].find(([k]) => k.endsWith('index.html'))
+      content = hit ? hit[1] : null
+    }
+    const file = content ? (Object.keys(Object.fromEntries(docsRef.current)).find((k) => docsRef.current.get(k) === content) || 'index.html') : 'index.html'
+    if (!content || !el) return { file, line: null }
+    const needles: RegExp[] = []
+    if (el.id) needles.push(new RegExp(`id=["']${escapeRE(el.id)}["']`))
+    if (el.className) needles.push(new RegExp(`class=["'][^"']*\\b${escapeRE(String(el.className).split(' ')[0])}\\b`, 'i'))
+    const txt = (el.text || '').replace(/\s+/g, ' ').trim().slice(0, 30)
+    if (txt) needles.push(new RegExp(`>\\s*${escapeRE(txt)}`, 'i'))
+    if (el.tag) needles.push(new RegExp(`<${el.tag}\\b`, 'i'))
+    const lines = content.split('\n')
+    if (el.id) {
+      for (let i = 0; i < lines.length; i++) if (needles[0].test(lines[i])) return { file, line: i + 1 }
+    }
+    for (let i = 0; i < lines.length; i++) {
+      for (const n of needles) if (n.test(lines[i])) return { file, line: i + 1 }
+    }
+    return { file, line: null }
+  }
 
   const build = useCallback(async () => {
     setPdLoading(true)
@@ -150,6 +178,7 @@ export function CodingMode() {
       const norm = (p: string) => p.replace(/^[\/\\]+/, '').split('?')[0]
       for (const f of files) {
         newBlobs.push(URL.createObjectURL(new Blob([f.content], { type: mimeFor(f.rel) })))
+        if (/\.(html?)$/.test(f.rel)) docsRef.current.set(f.rel, f.content)
       }
       const map = new Map(files.map((f, i) => [norm(f.rel), newBlobs[i]]))
       const idx = files.find((f) => /^index\.html?$/.test(norm(f.rel))) || files.find((f) => /\/index\.html?$/.test(norm(f.rel)))
@@ -203,7 +232,8 @@ export function CodingMode() {
     const onMsg = (ev: MessageEvent) => {
       const d = ev.data as { source?: string; type?: string; el?: EditElement }
       if (!d || d.source !== 'ghn-preview' || d.type !== 'pick' || !d.el) return
-      useApp.getState().setEditTarget(d.el)
+      const loc = locateElement(d.el)
+      useApp.getState().setEditTarget({ ...d.el, file: loc.file, line: loc.line })
       setPicking(false)
     }
     window.addEventListener('message', onMsg)
@@ -278,6 +308,18 @@ export function CodingMode() {
     }
   }
 
+  const undoRollback = async () => {
+    const prj = useApp.getState().activeProject
+    if (!prj || (prj.version || 0) <= 1) return
+    try {
+      await projectsApi.rollback(prj.id, (prj.version || 1) - 1)
+      useApp.getState().pushCodeAction({ kind: 'info', text: `↩ استرجاع الإصدار v${(prj.version || 1) - 1}` })
+      useApp.getState().pushToast({ kind: 'info', title: 'استرجاع', message: `جارٍ استرجاع الإصدار v${(prj.version || 1) - 1}…` })
+    } catch (err) {
+      useApp.getState().pushToast({ kind: 'error', title: 'فشل الاسترجاع', message: String((err as Error).message).slice(0, 120) })
+    }
+  }
+
   if (!shot) return null
 
   const typing = shot.typed
@@ -333,6 +375,19 @@ export function CodingMode() {
           >
             {publishing ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />} نشر الرابط الدائم
           </button>
+          {activeProject && (activeProject.version || 0) > 0 && (
+            <span className="flex items-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-[11px] text-slate-300">
+              v{activeProject.version}
+              <button
+                onClick={undoRollback}
+                disabled={(activeProject.version || 0) <= 1}
+                title="التراجع إلى النسخة السابقة"
+                className="rounded p-0.5 text-slate-400 transition hover:bg-white/10 hover:text-white disabled:opacity-30"
+              >
+                <Undo2 size={13} />
+              </button>
+            </span>
+          )}
           <button
             onClick={() => useApp.getState().exitCodingMode()}
             title="إنهاء والعودة للدردشة"
@@ -397,9 +452,21 @@ export function CodingMode() {
               {pdLoading && <Loader2 size={12} className="animate-spin" />}
               {pdStatus}
             </span>
-            <button onClick={() => setPicking((p) => !p)} className="rounded-md p-1 text-slate-500 hover:bg-white/10 hover:text-white" title="اختيار عنصر للتعديل">
-              <Pencil size={13} />
-            </button>
+            <div className="flex items-center gap-1">
+              {(['desktop', 'tablet', 'mobile'] as const).map((d) => (
+                <button
+                  key={d}
+                  onClick={() => useApp.getState().setPreviewDevice(d)}
+                  title={d === 'desktop' ? 'سطح المكتب' : d === 'tablet' ? 'لوحي' : 'موبايل'}
+                  className={`rounded-md p-1 transition ${previewDevice === d ? 'bg-white/15 text-white' : 'text-slate-500 hover:bg-white/10 hover:text-white'}`}
+                >
+                  {d === 'desktop' ? <Monitor size={13} /> : d === 'tablet' ? <Tablet size={13} /> : <Smartphone size={13} />}
+                </button>
+              ))}
+              <button onClick={() => setPicking((p) => !p)} className="rounded-md p-1 text-slate-500 hover:bg-white/10 hover:text-white" title="اختيار عنصر للتعديل">
+                <Pencil size={13} />
+              </button>
+            </div>
           </div>
 
           <div className="relative min-h-0 flex-1 bg-white p-3">
@@ -410,7 +477,7 @@ export function CodingMode() {
                 </span>
               </div>
             )}
-            <div className="h-full w-full overflow-hidden rounded-lg shadow-2xl">
+            <div className="h-full w-full overflow-hidden rounded-lg shadow-2xl" style={{ maxWidth: previewDevice === 'desktop' ? '100%' : previewDevice === 'tablet' ? '768px' : '390px', margin: 'auto' }}>
               <iframe
                 ref={iframeRef}
                 title="coding-live-site"
@@ -427,6 +494,12 @@ export function CodingMode() {
                     <Pencil size={13} className="shrink-0" />
                     {elDesc}
                   </span>
+                  {editTarget.file && (
+                    <span className="truncate rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-cyan-300" dir="ltr" title="المصدر الحقيقي في المشروع">
+                      📄 {editTarget.file}
+                      {editTarget.line ? `:${editTarget.line}` : ''}
+                    </span>
+                  )}
                   {editTarget.text && <span className="truncate text-[10px] text-slate-500">{editTarget.text.slice(0, 40)}</span>}
                 </div>
                 <div className="flex items-center gap-2">
@@ -452,6 +525,40 @@ export function CodingMode() {
           </div>
         </div>
       </div>
+
+      {/* حالة حالة المشروع والنشر */}
+      {activeProject && (
+        <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/10 bg-night-900/80 px-4 py-1.5 text-[11px] text-slate-400">
+          <span className="font-semibold text-white">{activeProject.name}</span>
+          <span className="font-mono text-[10px] text-slate-600" dir="ltr">{activeProject.id}</span>
+          <span>
+            المستودع: {activeProject.repo ? <span className="font-mono text-cyan-300" dir="ltr">{activeProject.repo}</span> : <span className="text-slate-600">—</span>}
+          </span>
+          <span className="flex items-center gap-1">
+            الحالة:{' '}
+            {activeProject.status === 'live' ? (
+              <span className="font-bold text-emerald-400">LIVE ✓</span>
+            ) : (
+              <span className="text-amber-300">مسودة</span>
+            )}
+          </span>
+          <span>الإصدار: <b className="text-white">v{activeProject.version || 0}</b></span>
+          {activeProject.lastPublish && (
+            <span>آخر نشر: {new Date(activeProject.lastPublish).toLocaleString('ar', { dateStyle: 'short', timeStyle: 'short' })}</span>
+          )}
+          {activeProject.url && (
+            <a
+              href={activeProject.url}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1 text-emerald-400 underline-offset-2 hover:underline"
+              dir="ltr"
+            >
+              <ExternalLink size={11} /> {activeProject.url.replace(/^https?:\/\//, '')}
+            </a>
+          )}
+        </div>
+      )}
 
       {/* سجل الأوامر */}
       <div className="flex h-36 shrink-0 flex-col border-t border-white/10 bg-night-900/70">

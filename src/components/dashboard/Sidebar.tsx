@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { MessageSquarePlus, FolderKanban, Settings, LogOut, Languages, Brain, History, Sparkles, Rocket, Cpu, PanelLeftClose, PanelLeftOpen, FolderTree, FileText, Focus as ZenIcon } from 'lucide-react'
-import { useApp } from '../../store/app'
+import { MessageSquarePlus, FolderKanban, Settings, LogOut, Languages, Brain, History, Sparkles, Rocket, Cpu, PanelLeftClose, PanelLeftOpen, FolderTree, FileText, Focus as ZenIcon, ExternalLink, RefreshCw, Undo2 } from 'lucide-react'
+import { useApp, type ProjectInfo } from '../../store/app'
 import { useI18n } from '../../i18n'
-import { workspace, deploy, api, type FileNode } from '../../api/client'
+import { deploy, api, projects as projectsApi } from '../../api/client'
 import { Logo } from '../common/Logo'
 import { FileTree } from '../arena/FileTree'
 
@@ -282,26 +282,79 @@ function SettingsPanel({ onBack }: { onBack: () => void }) {
 
 function ProjectsPanel({ onBack }: { onBack: () => void }) {
   const { t } = useI18n()
-  useEffect(() => {
-    useApp.getState().setBusy(true)
-    workspace
-      .tree()
-      .then((d) => useApp.getState().setFiles((d as { tree: FileNode[] }).tree))
-      .catch(() => undefined)
-      .finally(() => useApp.getState().setBusy(false))
-  }, [])
+  const changed = useApp((s) => s.prjOpen)
+  const busy = useApp((s) => s.busy)
+  const [tag, setTag] = useState(0)
 
-  const dirs = useApp((s) => s.files).filter((f) => f.type === 'dir')
+  useEffect(() => {
+    useApp.getState().refreshProjects().catch(() => undefined)
+  }, [changed, tag])
+
+  const projects = useApp((s) => s.projects)
+
+  const openProject = (p: ProjectInfo) => {
+    useApp.getState().setActiveProject(p)
+    useApp.getState().openArena(p.name || '')
+    onBack()
+  }
+
+  const rollbackTo = async (p: ProjectInfo) => {
+    if ((p.version || 0) <= 1) return
+    try {
+      await projectsApi.rollback(p.id, (p.version || 1) - 1)
+      setTag((x) => x + 1)
+    } catch {
+      /* ignore */
+    }
+  }
+
   return (
     <div className="space-y-2 px-1">
-      <button onClick={onBack} className="text-xs text-cyan-400 hover:underline">← {t('nav.home')}</button>
-      <p className="text-sm font-bold text-white">{t('nav.projects')}</p>
-      {!dirs.length && <p className="text-xs text-slate-500">لا مشاريع بعد.</p>}
-      {dirs.map((d) => (
-        <button key={d.path} className="flex w-full items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-start text-sm text-slate-200 transition hover:bg-white/10">
-          <FileText size={15} className="text-cyan-400" />
-          <span dir="auto">{d.name}</span>
+      <div className="flex items-center justify-between">
+        <button onClick={onBack} className="text-xs text-cyan-400 hover:underline">← {t('nav.home')}</button>
+        <button onClick={() => setTag((x) => x + 1)} className="flex items-center gap-1 rounded-lg p-1 text-[10px] text-slate-400 transition hover:bg-white/10 hover:text-white" title="تحديث">
+          <RefreshCw size={11} className={busy ? 'animate-spin' : ''} /> تحديث
         </button>
+      </div>
+      <p className="flex items-center justify-between text-sm font-bold text-white">
+        {t('nav.projects')}
+        <span className="rounded-full bg-white/5 px-2 py-0.5 font-mono text-[10px] text-slate-400">{projects.length}</span>
+      </p>
+      {!projects.length && (
+        <div className="rounded-xl bg-gradient-to-br from-violet-500/10 to-cyan-500/10 p-3 text-center text-xs text-slate-400 ring-1 ring-white/10">
+          <Sparkles size={16} className="mx-auto text-amber-300" />
+          <p className="mt-1.5">لا توجد مشاريع بعد.<br /> اطلب من Ghennai «اصنع لي موقعاً» وسيظهر هنا مع روابطه ونسخه.</p>
+        </div>
+      )}
+      {projects.map((p) => (
+        <div key={p.id} className="group rounded-xl bg-white/5 px-3 py-2 ring-1 ring-white/5 transition hover:bg-white/10">
+          <div className="flex items-center gap-2">
+            <FileText size={14} className="shrink-0 text-cyan-400" />
+            <button onClick={() => openProject(p)} className="min-w-0 flex-1 truncate text-start text-sm font-semibold text-slate-100 hover:text-cyan-300">
+              {p.name}
+            </button>
+            <span className={`rounded-full px-2 py-0.5 font-mono text-[9px] font-bold ${p.status === 'live' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>
+              {p.status === 'live' ? 'LIVE ✓' : 'مسودة'}
+            </span>
+          </div>
+          <p className="mt-1 flex items-center gap-2 text-[10px] text-slate-500">
+            <span className="font-mono" dir="ltr">{p.id}</span>
+            <span>v{p.version || 0}</span>
+            {p.lastPublish && <span>{new Date(p.lastPublish).toLocaleString('ar', { dateStyle: 'short', timeStyle: 'short' })}</span>}
+          </p>
+          {(p.status === 'live' || p.url) && (
+            <div className="mt-1.5 flex items-center gap-2">
+              <a href={p.url ?? '#'} target="_blank" rel="noreferrer" dir="ltr" className="flex min-w-0 items-center gap-1 truncate text-[10px] text-emerald-400 hover:underline">
+                <ExternalLink size={10} className="shrink-0" /> {p.url ? p.url.replace(/^https?:\/\//, '') : 'صفحة قيد الإعداد'}
+              </a>
+              {(p.version || 0) > 1 && (
+                <button onClick={() => rollbackTo(p)} title={`استرجاع v${(p.version || 1) - 1}`} className="rounded p-0.5 text-slate-500 transition hover:bg-white/10 hover:text-white">
+                  <Undo2 size={11} />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       ))}
     </div>
   )

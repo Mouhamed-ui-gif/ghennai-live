@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { RotateCcw, Sparkles, Loader2, ExternalLink } from 'lucide-react'
+import { RotateCcw, Sparkles, Loader2, ExternalLink, Monitor, Tablet, Smartphone } from 'lucide-react'
 import { useApp } from '../../store/app'
 import { workspace } from '../../api/client'
 import type { FileNode } from '../../store/app'
@@ -53,6 +53,7 @@ function rewriteHtml(html: string, map: Map<string, string>, norm: (p: string) =
 export function PreviewPane() {
   const variant = useApp((s) => s.previewVariant)
   const activeFile = useApp((s) => s.activeFile)
+  const previewDevice = useApp((s) => s.previewDevice)
   const [doc, setDoc] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState('…')
@@ -122,13 +123,28 @@ export function PreviewPane() {
           {status}
           {loading && <Loader2 size={12} className="animate-spin" />}
         </span>
-        <button onClick={build} className="rounded-lg p-1 text-slate-400 transition hover:bg-white/10 hover:text-white" title="تحديث">
-          <RotateCcw size={14} />
-        </button>
+        <div className="flex items-center gap-1">
+          {(['desktop', 'tablet', 'mobile'] as const).map((d) => (
+            <button
+              key={d}
+              onClick={() => useApp.getState().setPreviewDevice(d)}
+              title={d === 'desktop' ? 'سطح المكتب' : d === 'tablet' ? 'لوحي' : 'موبايل'}
+              className={`rounded-lg p-1 transition ${previewDevice === d ? 'bg-white/15 text-white' : 'text-slate-400 hover:bg-white/10 hover:text-white'}`}
+            >
+              {d === 'desktop' ? <Monitor size={13} /> : d === 'tablet' ? <Tablet size={13} /> : <Smartphone size={13} />}
+            </button>
+          ))}
+          <button onClick={build} className="rounded-lg p-1 text-slate-400 transition hover:bg-white/10 hover:text-white" title="تحديث">
+            <RotateCcw size={14} />
+          </button>
+        </div>
       </div>
       {doc ? (
         <div className="grid min-h-0 flex-1 place-items-center bg-white p-4">
-          <div className="h-full w-full overflow-hidden rounded-xl shadow-xl" style={{ transform: 'perspective(1400px) rotateX(2deg)' }}>
+          <div
+            className="h-full w-full overflow-hidden rounded-xl shadow-xl"
+            style={{ maxWidth: previewDevice === 'desktop' ? '100%' : previewDevice === 'tablet' ? '768px' : '390px', transform: 'perspective(1400px) rotateX(2deg)' }}
+          >
             <iframe title="live-preview" srcDoc={doc} className="h-full w-full border-0" sandbox="allow-scripts allow-same-origin allow-forms" />
           </div>
         </div>

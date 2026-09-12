@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import { userWorkspace } from './paths.js'
+import { userWorkspace, safeResolve } from './paths.js'
 
 const MARKER_COMMENT = /<!--\s*(?:css|js|meta|favicon|body|html-title|head|title)\s*-->\s*/g
 
@@ -136,4 +136,117 @@ export function repairUserSites(email) {
 
 function escapeReg(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** فحص شامل للموقع قبل اعتبار البناء ناجحًا: الملفات، الوصلات، الصياغة، الأصول */
+export function validateSite(root) {
+  const checks = []
+  const ok = (label, file, valid = true) => checks.push({ ok: !!valid, label, file: file || '' })
+
+  const idx = path.join(root, 'index.html')
+  const hasIdx = fs.existsSync(idx)
+  ok(hasIdx ? 'index.html موجود' : 'index.html غير موجود', 'index.html', hasIdx)
+  if (!hasIdx) return checks
+
+  let html = ''
+  try {
+    html = fs.readFileSync(idx, 'utf8')
+  } catch {
+    ok('لا يمكن قراءة index.html', 'index.html', false)
+    return checks
+  }
+  ok('يبدأ بـ <!DOCTYPE html>', 'index.html', /^\s*<!doctype html>/i.test(html))
+  ok('يحتوي <html> و <head>', 'index.html', /<html[\s>]/i.test(html) && /<\/head>/i.test(html))
+  if (/(لغة|عربية|ar)/i.test(html) && /lang=["'][^"']{2,}["']/.test(html)) {
+    ok('سمة اللغة موجودة', 'index.html', true)
+  }
+  if (html.trim().length < 300) ok('المحتوى ليس ناقصًا (حجم HTML كافٍ)', 'index.html', false)
+
+  const seen = new Set()
+  const refs = localRefs(html)
+  for (const r of refs) {
+    if (seen.has(r.ref)) continue
+    seen.add(r.ref)
+    const fn = r.ref.startsWith('/') ? path.join(root, r.ref.replace(/^\/+/, '')) : path.join(root, r.ref)
+    ok(`المرجع «${r.ref}» يعمل`, r.ref, fs.existsSync(fn))
+  }
+
+  // فحص صياغة JS عبر node --check
+  const jsFiles = []
+  const scanJs = (dir, depth) => {
+    if (depth > 3) return
+    let entries = []
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      if (e.name.startsWith('.git') || e.name === 'node_modules') continue
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) scanJs(p, depth + 1)
+      else if (/\.(js|mjs)$/.test(e.name)) jsFiles.push(p)
+    }
+  }
+  scanJs(root, 0)
+  for (const f of jsFiles.slice(0, 15)) {
+    let size = 0
+    try {
+      size = fs.statSync(f).size
+    } catch {}
+    if (size > 400 * 1024) continue
+    let syntaxOk = true
+    try {
+      new Function(fs.readFileSync(f, 'utf8')) // eslint-disable-line no-new-func
+    } catch {
+      syntaxOk = false
+    }
+    ok(`صياغة JavaScript سليمة — ${path.relative(root, f)}`, path.relative(root, f), syntaxOk)
+  }
+
+  // توازن أقواس CSS + مراجع url()
+  const cssFiles = []
+  const scanCss = (dir, depth) => {
+    if (depth > 3) return
+    let entries = []
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      if (e.name.startsWith('.git') || e.name === 'node_modules') continue
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) scanCss(p, depth + 1)
+      else if (e.name.endsWith('.css')) cssFiles.push(p)
+    }
+  }
+  scanCss(root, 0)
+  for (const f of cssFiles.slice(0, 10)) {
+    let css = ''
+    try {
+      css = fs.readFileSync(f, 'utf8')
+    } catch {
+      continue
+    }
+    const open = (css.match(/\{/g) || []).length
+    const close = (css.match(/\}/g) || []).length
+    ok(`أقواس CSS متوازنة (${path.relative(root, f)})`, path.relative(root, f), open === close)
+  }
+
+  // وجود أي أصول مُشار إليها من HTML وCSS وصور داخلية
+  const urls = html.match(/url\(\s*["']?([^"')]+)["']?\s*\)/g) || []
+  for (const u of urls) {
+    const ref = u.replace(/url\(\s*["']?/, '').replace(/["']?\s*\)$/, '').split('?')[0].replace(/^\.?\//, '')
+    if (!ref || ref.startsWith('http') || ref.startsWith('data:') || ref.startsWith('#')) continue
+    ok(`الأصل «${ref}» موجود`, ref, fs.existsSync(path.join(root, ref)))
+  }
+
+  return checks
+}
+
+export function validateUserSite(email, rootRel) {
+  const ws = userWorkspace(email)
+  const root = rootRel ? safeResolve(ws, rootRel) : ws
+  return validateSite(root)
 }

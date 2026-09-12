@@ -164,6 +164,15 @@ export const deploy = {
     http('/api/deploy/token', { method: 'POST', body: JSON.stringify({ token }) }),
 }
 
+export const projects = {
+  list: () => http('/api/projects'),
+  get: (id: string) => http(`/api/projects/${encodeURIComponent(id)}`),
+  rollback: (id: string, version: number) =>
+    http('/api/projects/rollback', { method: 'POST', body: JSON.stringify({ id, version }) }),
+  register: (name?: string, root?: string) =>
+    http('/api/projects/register', { method: 'POST', body: JSON.stringify({ name, root }) }),
+}
+
 export interface FileNode {
   name: string
   path: string

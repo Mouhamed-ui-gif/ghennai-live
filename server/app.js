@@ -12,6 +12,7 @@ import workspaceRoutes from './routes/workspace.js'
 import visionRoutes from './routes/vision.js'
 import deployRoutes from './routes/deploy.js'
 import brainRoutes from './routes/brain.js'
+import projectRoutes from './routes/projects.js'
 import voiceRoutes, { ttsAvailable, isSttAvailable } from './routes/voice.js'
 
 const app = express()
@@ -41,6 +42,7 @@ app.use('/api/workspace', workspaceRoutes)
 app.use('/api/vision', visionRoutes)
 app.use('/api/voice', voiceRoutes)
 app.use('/api/deploy', deployRoutes)
+app.use('/api/projects', projectRoutes)
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const distDir = join(__dirname, '..', 'dist')

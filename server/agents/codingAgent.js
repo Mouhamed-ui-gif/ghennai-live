@@ -6,12 +6,18 @@ import { audit } from '../lib/auditLog.js'
 import { userWorkspace } from '../lib/paths.js'
 import { contextBlock, rememberProject } from '../lib/memory.js'
 import { seedTemplates } from '../lib/templateKit.js'
-import { repairUserSites } from '../lib/siteDoctor.js'
+import { repairUserSites, validateUserSite } from '../lib/siteDoctor.js'
+import { ensureProject, setProjectMeta, snapshotProject, listVersions, guessProjectRoot } from '../lib/projects.js'
 
 const MAX_ITERATIONS = 12
 const MAX_TYPED_CHARS = 30000
+const MAX_FIX_ROUNDS = 2
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+function emitProjectState(email, project, versions = listVersions(email, project?.root || '')) {
+  emitUser(email, { type: 'project_state', project: { ...project, versions } })
+}
 
 function detectProjectName(msg) {
   const m = String(msg || '').match(/["'“”«»]([^"'“”«»]{2,40})["'“”«»]/)
@@ -249,7 +255,10 @@ async function* runCoding(user, userMessage, opts = {}) {
       content: `Workspace root: ${ws}\n\nThe user clicked this element in their live preview and wants this change applied.\nRead the source files first, then use replaceInFile (or writeFile as a last resort). Verify before replying.`,
     })
   } else {
+    const root = guessProjectRoot(ws) || '.'
     yield { type: 'coding_start', project: detectProjectName(userMessage), request: userMessage, mode: 'build' }
+    const registered = ensureProject(user.email, root, detectProjectName(userMessage))
+    emitProjectState(user.email, registered)
     messages.push(
       { role: 'system', content: SYSTEM_PROMPT + memory },
       {
@@ -262,6 +271,7 @@ async function* runCoding(user, userMessage, opts = {}) {
 
   let built = false
   let attempts = 0
+  let fixRounds = 0
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     let res
     try {
@@ -286,9 +296,42 @@ async function* runCoding(user, userMessage, opts = {}) {
     const toolCalls = res.toolCalls || []
     if (!toolCalls.length) {
       runRepairs(user)
+
+      // ── الفحص الشامل قبل إعلان النجاح ──
+      const root = guessProjectRoot(ws, opts.root || null) || '.'
+      let checks = []
+      if (!editMode) {
+        checks = validateUserSite(user.email, root)
+        yield { type: 'validation_report', project: root || '.', ok: checks.every((c) => c.ok), checks: checks.slice(0, 40) }
+        const failing = checks.filter((c) => !c.ok)
+        if (failing.length && fixRounds < MAX_FIX_ROUNDS) {
+          fixRounds++
+          built = true
+          yield { type: 'agent', agent: 'Coding', message: `الفحص رصد ${failing.length} مشكلة — يعالجها تلقائيًا (جولة ${fixRounds}/${MAX_FIX_ROUNDS})…`, status: 'running' }
+          const list = failing.map((c, n) => `${n + 1}. [${c.file || 'site'}] ${c.label}`).join('\n')
+          messages.push({ role: 'system', content: `VALIDATION REPORT — these are the REAL problems in the current project files:\n${list}\nFix each one in its actual file now: readFile the file, correct it (writeFile/replaceInFile), and re-verify. Do not claim fixes that are not actually applied.` })
+          messages.push({ role: 'user', content: 'أصلح كل المشاكل المذكورة أعلاه في ملفاتها الحقيقية الآن، وتأكد أنها أُصلحت فعليًا، ثم أعد الملخص النهائي.' })
+          if (messages.length > 40) messages.splice(4, messages.length - 36)
+          continue
+        }
+      }
+
+      // ── تسجيل المشروع + لقطة نسخة (Undo/Rollback) ──
+      const project = ensureProject(user.email, root, detectProjectName(userMessage))
+      const nextVersion = (project.version || 0) + 1
+      try {
+        snapshotProject(user.email, root, nextVersion)
+        const meta = { version: nextVersion, lastBuild: Date.now(), built: built || attempts > 0, updatedAt: Date.now() }
+        if (editMode) meta.status = 'idle'
+        const saved = setProjectMeta(user.email, project.id, meta)
+        emitProjectState(user.email, saved)
+      } catch {
+        /* النسخ الاحتياطي اختياري */
+      }
+
       if (res.content) yield* yieldTyped(res.content, { rate: 5, chunk: 120 })
       yield { type: 'code_token', action: 'done' }
-      yield { type: 'coding_done', built: built || attempts > 0, content: res.content || '' }
+      yield { type: 'coding_done', built: built || attempts > 0, content: res.content || '', version: nextVersion }
       yield { type: 'answer', content: res.content || 'انتهت المهمة.' }
       rememberProject(user.email, 'last', { summary: String(res.content).slice(0, 400), ts: Date.now() })
       return

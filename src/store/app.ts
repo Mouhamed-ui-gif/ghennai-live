@@ -46,6 +46,23 @@ export interface EditElement {
   text: string
   href?: string | null
   src?: string | null
+  file?: string | null
+  line?: number | null
+}
+export interface ProjectInfo {
+  id: string
+  name: string
+  root: string
+  repo?: string
+  repoUrl?: string
+  url?: string
+  pagesUrl?: string
+  status?: 'idle' | 'live' | 'deployed' | 'error'
+  version?: number
+  lastPublish?: number
+  lastBuild?: number
+  updatedAt?: number
+  versions?: number[]
 }
 export interface CodingShot {
   project: string
@@ -140,6 +157,11 @@ interface AppState {
   editTarget: EditElement | null
   editBusy: boolean
 
+  projects: ProjectInfo[]
+  prjOpen: boolean
+  activeProject: ProjectInfo | null
+  previewDevice: 'desktop' | 'tablet' | 'mobile'
+
   brainOpen: boolean
   sessionsOpen: boolean
   resumeText: string | null
@@ -230,6 +252,14 @@ interface AppState {
   setCodeFileContent: (c: string | null) => void
   setEditTarget: (e: EditElement | null) => void
   setEditBusy: (b: boolean) => void
+
+  setProjects: (p: ProjectInfo[]) => void
+  upsertProject: (p: ProjectInfo) => void
+  refreshProjects: () => Promise<void>
+  openProjects: () => void
+  closeProjects: () => void
+  setActiveProject: (p: ProjectInfo | null) => void
+  setPreviewDevice: (d: 'desktop' | 'tablet' | 'mobile') => void
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10)
@@ -267,6 +297,11 @@ export const useApp = create<AppState>((set, get) => ({
   codeFileContent: null,
   editTarget: null,
   editBusy: false,
+
+  projects: [],
+  prjOpen: false,
+  activeProject: null,
+  previewDevice: 'desktop',
 
   brainOpen: false,
   sessionsOpen: false,
@@ -534,6 +569,33 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
   setEditTarget: (e) => set({ editTarget: e, editBusy: false }),
 
   setEditBusy: (b) => set({ editBusy: b }),
+
+  setProjects: (p) => set({ projects: p }),
+
+  upsertProject: (p) =>
+    set((s) => {
+      const exists = s.projects.some((x) => x.id === p.id)
+      const list = exists ? s.projects.map((x) => (x.id === p.id ? { ...x, ...p } : x)) : [{ ...p }, ...s.projects]
+      return {
+        projects: list,
+        activeProject: s.activeProject?.id === p.id ? { ...s.activeProject, ...p } : s.activeProject,
+      }
+    }),
+
+  refreshProjects: async () => {
+    try {
+      const { projects } = await import('../api/client')
+      const d = await projects.list()
+      set({ projects: d.projects || [] })
+    } catch {
+      /* noop */
+    }
+  },
+
+  openProjects: () => set({ prjOpen: true }),
+  closeProjects: () => set({ prjOpen: false }),
+  setActiveProject: (p) => set({ activeProject: p }),
+  setPreviewDevice: (d) => set({ previewDevice: d }),
 }))
 
 if (typeof window !== 'undefined' && window.location?.hostname === 'localhost') {

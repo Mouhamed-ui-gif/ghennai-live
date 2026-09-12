@@ -1,4 +1,5 @@
 import type { SSEvent } from '../api/client'
+import type { ProjectInfo } from '../store/app'
 import { useApp } from '../store/app'
 import { workspace } from '../api/client'
 import { speakText, voiceFor } from '../components/dashboard/voice'
@@ -25,6 +26,40 @@ export function handleChatEvent(e: SSEvent): void {
       if (ev.mode === 'edit' && ev.element) st.setEditTarget(ev.element as { tag: string; id: string; className: string; text: string; href?: string | null; src?: string | null })
       st.pushActivity({ agent: 'Coding', message: ev.mode === 'edit' ? '✂️ تعديل عنصر محدد' : `⏺ يبدأ بناء «${ev.project}»`, status: 'running' })
       if (st.codingVoice) speakText('بسْمِ الله، بدأْتُ العملَ الآن — ستَرى الكودَ يُكتبُ أمامَك حرفًا بحرف', uiLang(), undefined, voiceFor('Coding'))
+      void st.refreshProjects()
+      break
+    }
+    case 'project_state': {
+      const ev = e as unknown as { project?: ProjectInfo }
+      const st = useApp.getState()
+      if (ev.project) {
+        st.upsertProject(ev.project)
+        if (!st.activeProject && st.codingOpen) st.setActiveProject(ev.project)
+      }
+      break
+    }
+    case 'validation_report': {
+      const ev = e as unknown as { ok?: boolean; checks?: { ok: boolean; label: string; file?: string }[] }
+      const st = useApp.getState()
+      st.pushCodeAction({
+        kind: ev.ok ? 'ok' : 'info',
+        text: ev.ok ? 'الفحص الشامل قبل النشر: كل شيء سليم ✓' : `الفحص رصد (${(ev.checks || []).filter((c) => !c.ok).length}) مشكلة — يُصلحها…`,
+      })
+      if (ev.ok && ev.checks) {
+        for (const c of ev.checks.slice(0, 12)) st.pushCodeAction({ kind: 'ok', text: `✓ ${c.label}` })
+      }
+      if (st.codingVoice && ev.ok && st.codingOpen) {
+        speakText('تمَّتِ الفحوصاتُ كلُّها بنجاح — الموقعُ مدقّقٌ وجاهز', uiLang(), undefined, voiceFor('Coding'))
+      }
+      break
+    }
+    case 'project_restored': {
+      const ev = e as unknown as { id?: string; version?: number }
+      const st = useApp.getState()
+      st.pushToast({ kind: 'success', title: 'تم الاسترجاع', message: `رُجِع المشروع إلى النسخة v${ev.version ?? ''}` })
+      void refreshTree()
+      st.bumpPreview()
+      void st.refreshProjects()
       break
     }
     case 'code_token': {
@@ -87,6 +122,7 @@ export function handleChatEvent(e: SSEvent): void {
         speakText(ev.built ? 'تمّتِ المهمةُ بنجاح — موقعُك أصبحَ جاهزًا الآن، وبإمكانِكَ نشره برابطٍ دائم' : 'انتهيتُ من العملِ بنجاح', uiLang(), undefined, voiceFor('Coding'))
       }
       void refreshTree()
+      void st.refreshProjects()
       st.bumpPreview()
       setTimeout(() => refreshTree(), 3000)
       break

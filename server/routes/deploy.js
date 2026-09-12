@@ -7,6 +7,7 @@ import { userWorkspace, safeResolve } from '../lib/paths.js'
 import { emitUser } from '../lib/events.js'
 import { audit } from '../lib/auditLog.js'
 import { User } from '../lib/db.js'
+import { ensureProject, setProjectMeta, snapshotProject } from '../lib/projects.js'
 
 const router = express.Router()
 const GITHUB_API = 'https://api.github.com'
@@ -249,9 +250,34 @@ router.post('/', requireAuth, async (req, res) => {
 
     emit(email, 'done', 'تم النشر بنجاح! 🚀')
     emitUser(email, { type: 'deploy_done', url: liveUrl, repoUrl: url })
+    let projectInfo = null
+    try {
+      const rootRel = path.relative(ws, siteDir) || ''
+      let project = ensureProject(email, rootRel, path.basename(siteDir) || 'الموقع الرئيسي')
+      const nextVersion = (project.version || 0) + 1
+      const meta = {
+        repo: repoName,
+        repoUrl: url,
+        url: liveUrl,
+        pagesUrl,
+        status: 'live',
+        lastPublish: Date.now(),
+        lastBuild: Date.now(),
+        version: nextVersion,
+        updatedAt: Date.now(),
+      }
+      try {
+        snapshotProject(email, rootRel, nextVersion)
+      } catch {}
+      project = setProjectMeta(email, project.id, meta)
+      emitUser(email, { type: 'project_state', project: { ...project, versions: [] } })
+      projectInfo = { id: project.id, version: project.version, url: liveUrl, repo: repoName }
+    } catch {
+      /* غير حرج */
+    }
     if (/github\.io/.test(liveUrl)) verifyLive(email, liveUrl)
     audit({ user: email, agent: 'deploy', action: 'deploy', result: liveUrl, status: 'success' })
-    res.json({ ok: true, url: liveUrl, repo: repoName, repoUrl: url })
+    res.json({ ok: true, url: liveUrl, repo: repoName, repoUrl: url, project: projectInfo })
   } catch (e) {
     const msg = String(e.message || e)
     emit(email, 'error', msg)
