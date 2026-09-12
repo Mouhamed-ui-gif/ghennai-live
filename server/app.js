@@ -46,7 +46,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const distDir = join(__dirname, '..', 'dist')
 if (existsSync(distDir)) {
   app.use(express.static(distDir))
-  app.get(/^(?!\/(api|uploads)).*/, (req, res) => res.sendFile(join(distDir, 'index.html')))
+  app.use('/ghennai-app', express.static(distDir))
+  app.get(/^(?!\/(api|uploads|assets|ghennai-app)).*/, (req, res) => res.sendFile(join(distDir, 'index.html')))
 }
 
 export default app
