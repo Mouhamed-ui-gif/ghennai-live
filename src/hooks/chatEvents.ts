@@ -21,11 +21,13 @@ export function handleChatEvent(e: SSEvent): void {
     case 'coding_start': {
       const ev = e as unknown as { project?: string; request?: string; mode?: string; element?: unknown; root?: string | null }
       const st = useApp.getState()
-      st.enterCodingMode(ev.project || 'الموقع الجديد', ev.mode === 'edit' ? 'edit' : 'build', ev.request || '')
+      const editing = ev.mode === 'edit' || ev.mode === 'propose'
+      st.setEditPend(null)
+      st.enterCodingMode(ev.project || 'الموقع الجديد', editing ? 'edit' : 'build', ev.request || '')
       st.setCodingProjectFolder(ev.root || null)
-      st.pushCodeAction({ kind: 'notice', text: ev.mode === 'edit' ? `✂️ ${ev.request?.slice(0, 140) || 'تعديل عنصر'}` : `⏺ بدء بناء «${ev.project}»` })
-      if (ev.mode === 'edit' && ev.element) st.setEditTarget(ev.element as { tag: string; id: string; className: string; text: string; href?: string | null; src?: string | null })
-      st.pushActivity({ agent: 'Coding', message: ev.mode === 'edit' ? '✂️ تعديل عنصر محدد' : `⏺ يبدأ بناء «${ev.project}»`, status: 'running' })
+      st.pushCodeAction({ kind: 'notice', text: editing ? `✂️ ${ev.request?.slice(0, 140) || 'تعديل عنصر'}` : `⏺ بدء بناء «${ev.project}»` })
+      if (editing && ev.element) st.setEditTarget(ev.element as { tag: string; id: string; className: string; text: string; href?: string | null; src?: string | null })
+      st.pushActivity({ agent: 'Coding', message: editing ? (ev.mode === 'propose' ? '📋 يحضّر مقترح التعديل…' : '✂️ تعديل عنصر محدد') : `⏺ يبدأ بناء «${ev.project}»`, status: 'running' })
       if (st.codingVoice) speakText('بسْمِ الله، بدأْتُ العملَ الآن — ستَرى الكودَ يُكتبُ أمامَك حرفًا بحرف', uiLang(), undefined, voiceFor('Coding'))
       void st.refreshProjects()
       break
@@ -52,6 +54,50 @@ export function handleChatEvent(e: SSEvent): void {
       if (st.codingVoice && ev.ok && st.codingOpen) {
         speakText('تمَّتِ الفحوصاتُ كلُّها بنجاح — الموقعُ مدقّقٌ وجاهز', uiLang(), undefined, voiceFor('Coding'))
       }
+      break
+    }
+    case 'edit_proposal': {
+      const ev = e as unknown as { element?: unknown; root?: string | null; request?: string; summary?: string }
+      const st = useApp.getState()
+      st.setEditBusy(false)
+      st.setEditPend({
+        element: (ev.element as { tag: string; id: string; className: string; text: string; href?: string | null; src?: string | null } | undefined) ?? (st.editTarget as { tag: string; id: string; className: string; text: string; href?: string | null; src?: string | null } | null) ?? null,
+        root: ev.root ?? st.codingProjectFolder,
+        request: ev.request || '',
+        summary: ev.summary || 'اقتراحي جاهز — وافق على التعديل.',
+      })
+      st.pushCodeAction({ kind: 'edit', text: `📋 اقتراح: ${(ev.summary || '').replace(/\n+/g, ' ').slice(0, 180)}` })
+      st.pushActivity({ agent: 'Coding', message: '📋 اقتراح التعديل جاهز — ينتظر موافقتك', status: 'info' })
+      if (st.codingVoice && st.codingOpen) speakText('اقتراحي جاهز — وافِق على التعديل وأطبّقه فورًا', uiLang(), undefined, voiceFor('Coding'))
+      break
+    }
+    case 'deploy_progress': {
+      const ev = e as unknown as { stage?: string; message?: string }
+      const st = useApp.getState()
+      st.setDeployState('deploying')
+      if (ev.message) {
+        st.pushDeployStage(ev.message)
+        if (st.codingOpen) st.pushCodeAction({ kind: 'info', text: `🚀 ${ev.message}` })
+      }
+      break
+    }
+    case 'deploy_verified': {
+      const ev = e as unknown as { url?: string }
+      const st = useApp.getState()
+      st.setDeployState('done', ev.url ?? null, null)
+      if (ev.url && st.codingOpen) st.pushCodeAction({ kind: 'ok', text: `الرابط حي ✓ ${ev.url}` })
+      break
+    }
+    case 'deploy_done': {
+      const ev = e as unknown as { url?: string; repoUrl?: string }
+      const st = useApp.getState()
+      st.setDeployState('done', ev.url ?? null, null)
+      st.pushCodeAction({ kind: 'ok', text: `نُشر الموقع على رابطك: ${ev.url}` })
+      st.pushToast({ kind: 'success', title: 'موقعك أصبح حيًا! 🚀', message: ev.url || '' })
+      if (st.codingVoice && st.codingOpen) {
+        speakText('تمّ النشرُ بنجاح — موقعُك الآن على رابطٍ دائم يمكنكَ فتحُه من الزرّ', uiLang(), undefined, voiceFor('Coding'))
+      }
+      void st.refreshProjects()
       break
     }
     case 'project_restored': {

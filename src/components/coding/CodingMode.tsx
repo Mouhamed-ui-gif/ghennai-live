@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
-import { Rocket, X, Loader2, Volume2, VolumeX, Pencil, Sparkles, RefreshCw, Monitor, Tablet, Smartphone, Undo2, ExternalLink } from 'lucide-react'
-import { useApp, type EditElement, type FileNode, type ProjectInfo } from '../../store/app'
+import { Rocket, X, Loader2, Volume2, VolumeX, Pencil, Sparkles, RefreshCw, Monitor, Tablet, Smartphone, Undo2, ExternalLink, Check } from 'lucide-react'
+import { useApp, type EditElement, type FileNode } from '../../store/app'
 import { workspace, chatStream, deploy, projects as projectsApi } from '../../api/client'
 import { handleChatEvent } from '../../hooks/chatEvents'
 import { speakText, voiceFor } from '../dashboard/voice'
@@ -114,6 +114,7 @@ export function CodingMode() {
   const codeFileContent = useApp((s) => s.codeFileContent)
   const editTarget = useApp((s) => s.editTarget)
   const editBusy = useApp((s) => s.editBusy)
+  const editPend = useApp((s) => s.editPend)
   const variant = useApp((s) => s.previewVariant)
   const previewDevice = useApp((s) => s.previewDevice)
   const activeProject = useApp((s) => s.activeProject)
@@ -261,6 +262,25 @@ export function CodingMode() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  const runEditRequest = (payload: { message: string; agent: string; edit: Record<string, unknown> }) => {
+    const st = useApp.getState()
+    st.setEditBusy(true)
+    st.setBusy(true)
+    chatStream(
+      payload,
+      (e) => handleChatEvent(e),
+      () => {
+        st.setEditBusy(false)
+        st.setBusy(false)
+        setTimeout(() => st.setBusy(false), 1200)
+        setTimeout(() => {
+          if (!useApp.getState().editPend && !useApp.getState().editBusy) st.setEditTarget(null)
+        }, 600)
+      }
+    )
+  }
+
+  /** الخطوة الأولى للتعديل: الوكيل يحضّر اقتراحًا فقط (لا يعدّل حتى يوافق المستخدم) */
   const submitEdit = () => {
     const st = useApp.getState()
     const el = st.editTarget
@@ -268,22 +288,35 @@ export function CodingMode() {
     if (!el || !text || st.editBusy) return
     const label = el.text ? `«${el.text.slice(0, 40)}»` : `<${el.tag}>`
     st.addUserMsg(`✂️ ${label} ← ${text}`)
-    st.setEditBusy(true)
-    st.setBusy(true)
     st.pushCodeAction({ kind: 'edit', text: `✂️ ${label}: ${text}` })
     const lang = document.documentElement.lang === 'ar' ? 'ar' : 'en'
-    if (st.codingVoice) speakText('حسنًا، سأعدّل العنصر الذي اخترتَه الآن', lang, undefined, voiceFor('Coding'))
+    if (st.codingVoice) speakText('حسنًا، دعني أعرضُ عليك اقتراحًا قبل التعديل', lang, undefined, voiceFor('Coding'))
     setEditText('')
-    chatStream(
-      { message: text, agent: 'Coding', edit: { element: el } },
-      (e) => handleChatEvent(e),
-      () => {
-        st.setEditBusy(false)
-        st.setBusy(false)
-        setTimeout(() => st.setBusy(false), 1200)
-        st.setEditTarget(null)
-      }
-    )
+    const root = el.file ? dirOf(el.file) : st.codingProjectFolder || null
+    runEditRequest({ message: text, agent: 'Coding', edit: { element: el, root, propose: true } })
+  }
+
+  /** الخطوة الثانية: المستخدم وافق — يُطبَّق التعديل الجراحي */
+  const applyEdit = () => {
+    const st = useApp.getState()
+    const pend = st.editPend
+    if (!pend || st.editBusy) return
+    st.addUserMsg(`✅ ${pend.request}`)
+    st.pushCodeAction({ kind: 'edit', text: `✅ وافق المستخدم — تطبيق: ${pend.request.slice(0, 120)}` })
+    if (st.codingVoice) speakText('ممتاز، وافقْتَ — سأطبّقُ التعديلَ الآن', document.documentElement.lang === 'ar' ? 'ar' : 'en', undefined, voiceFor('Coding'))
+    const payload = {
+      message: pend.request,
+      agent: 'Coding',
+      edit: { element: pend.element ?? null, root: pend.root ?? null, propose: false },
+    }
+    runEditRequest(payload)
+  }
+
+  const cancelEdit = () => {
+    const st = useApp.getState()
+    st.setEditPend(null)
+    st.setEditTarget(null)
+    st.pushCodeAction({ kind: 'info', text: '⏹ أُلغيت الموافقة — لم يحدث أي تعديل' })
   }
 
   const publish = async () => {
@@ -493,7 +526,36 @@ export function CodingMode() {
               />
             </div>
 
-            {editTarget && (
+            {editPend && !editBusy && (
+              <div className="absolute inset-x-3 bottom-3 z-30 mx-auto max-w-lg rounded-xl border border-emerald-400/30 bg-night-900/95 p-3 shadow-2xl backdrop-blur">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 truncate text-[11px] font-bold text-emerald-300">
+                    <Sparkles size={13} className="shrink-0" /> اقتراح التعديل — هل توافق على تطبيقه؟
+                  </span>
+                  <span className="shrink-0 rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-cyan-300" dir="ltr">
+                    {editPend.element ? (editPend.element.id ? `#${editPend.element.id}` : '<' + editPend.element.tag + '>') : editPend.root || '.'}
+                  </span>
+                </div>
+                <p className="mb-3 max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-night-950/70 p-2.5 text-[12px] leading-relaxed text-slate-300">
+                  {editPend.summary}
+                </p>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    onClick={cancelEdit}
+                    className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[12px] text-slate-300 transition hover:bg-white/10"
+                  >
+                    <X size={13} /> لا، لا تعدّل
+                  </button>
+                  <button
+                    onClick={applyEdit}
+                    className="flex items-center gap-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-[12px] font-semibold text-night-950 transition hover:bg-emerald-400"
+                  >
+                    <Check size={14} /> نعم، نفّذ التعديل
+                  </button>
+                </div>
+              </div>
+            )}
+            {editTarget && !editPend && (
               <div className="absolute inset-x-3 bottom-3 mx-auto max-w-lg rounded-xl border border-violet-400/30 bg-night-900/95 p-3 shadow-2xl backdrop-blur">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="flex items-center gap-1.5 truncate font-mono text-[11px] text-violet-300" dir="ltr">
@@ -553,15 +615,20 @@ export function CodingMode() {
             <span>آخر نشر: {new Date(activeProject.lastPublish).toLocaleString('ar', { dateStyle: 'short', timeStyle: 'short' })}</span>
           )}
           {activeProject.url && (
-            <a
-              href={activeProject.url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-1 text-emerald-400 underline-offset-2 hover:underline"
-              dir="ltr"
-            >
-              <ExternalLink size={11} /> {activeProject.url.replace(/^https?:\/\//, '')}
-            </a>
+            <span className="flex items-center gap-1.5">
+              <a
+                href={activeProject.url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 rounded-lg bg-emerald-500/90 px-2.5 py-1 text-[11px] font-bold text-night-950 underline-offset-2 transition hover:bg-emerald-400"
+                dir="ltr"
+              >
+                <ExternalLink size={12} /> افتح موقعي
+              </a>
+              <span className="font-mono text-[10px] text-emerald-400/80" dir="ltr" title={activeProject.url}>
+                {activeProject.url.replace(/^https?:\/\//, '')}
+              </span>
+            </span>
           )}
         </div>
       )}

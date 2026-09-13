@@ -9,6 +9,8 @@ import { contextBlock } from '../lib/memory.js'
 import { agentMemory, agentMemoryBlock, rememberLastRequest } from '../lib/agentMemory.js'
 import { getPrefs, modelFor } from '../lib/brainPrefs.js'
 import { appendMsg, createSession, getSession, currentSessionId } from '../lib/sessions.js'
+import { projectsFor } from '../lib/projects.js'
+import { safeResolve } from '../lib/paths.js'
 import tools from '../tools/registry.js'
 import searchTools from '../tools/search.js'
 import external from '../tools/external.js'
@@ -101,6 +103,24 @@ const IDENTITY_NOTE = `
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 class PausedError extends Error {}
+
+/** طلب تعديل بلغة طبيعية على موقع قائم */
+const EDIT_ASK_RE = /(عدّل|عدل|غيّر|غير|بدّل|لوّن|صبّغ|غيّر لون|غيّر العنوان|غيّر النص|غيّر الألوان|غيّر الالوان|أضف|اضف|احذف|حذف|أزل|ازل|كبّر الخط|صغّر الخط|غيّر في موقعي|عدّل في موقعي|صلّح موقعي|أصلح موقعي|حدّث موقعي|بدّل في موقعي)/i
+
+/** آخر مشروع حيّ (مبني على القرص ويحوي index.html) ليُعدَّل باللغة الطبيعية */
+function liveProjectFor(email) {
+  const ws = userWorkspace(email)
+  const map = projectsFor(email)
+  const list = Object.values(map).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  for (const p of list) {
+    const root = p.root == null || p.root === '' ? null : p.root
+    try {
+      const abs = root ? safeResolve(ws, root) : ws
+      if (fs.existsSync(path.join(abs, 'index.html'))) return p
+    } catch { /* skip */ }
+  }
+  return null
+}
 
 /** ═══════════ حالة العقل الحيّة لكل مستخدم ═══════════ */
 const live = new Map()
@@ -532,7 +552,7 @@ function looksLikeBuild(goal) {
 /** ═══════════ القاعدة الحديدية: اختصاص كل وكيل بلا تداخل ═══════════ */
 const DOMAIN_WEAK = {}
 const DOMAIN_STRONG = {}
-DOMAIN_STRONG.Coding = /(ابن|ابني|بني|انشئ|إنشاء|اصنع|اعمل لي|أسوي|ايسوي|اكتب لي كود|كود لي|برمج لي|عطيني كود|بناء|شي لمنوع|موقع لي|صفحة لي|تطبيق لي|اصلح|أصلح|عدل لي|coding)/i
+DOMAIN_STRONG.Coding = /(ابن|ابني|بني|انشئ|إنشاء|اصنع|اعمل لي|أسوي|ايسوي|اكتب لي كود|كود لي|برمج لي|عطيني كود|بناء|شي لمنوع|موقع لي|صفحة لي|تطبيق لي|اصلح|أصلح|عدل لي|عدّل|عدل|غيّر|غير|بدّل|لوّن|لوَّن|صبّغ|احذف|حذف|أزل|ازل|أضف|اضف|coding)/i
 DOMAIN_WEAK.Coding = /(برمجة|برمج|كود|كواد|موقع|مواقع|صفحة|قالب|تطبيق|تطبيقات|لوحة تحكم|مشروع|react|html|css|vite|electron|tauri|flutter|داجنغو)/i
 DOMAIN_STRONG.Design = /(صمم|صمم لي|تصميم|الوان|ألوان|لوّن|درج|هوية بصرية)/i
 DOMAIN_WEAK.Design = /(واجهة|واجهات|ui|ux|شعار|logo|بنر|بورتفوليو|خطوط|أيقونة|ثيم|تدرج|palette|colors|color)/i
@@ -605,24 +625,26 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
   try {
     if (prefs.paused) throw new PausedError('⏸️ الوكلاء متوقفون مؤقتًا')
 
-    // ── وضع التعديل: عنصر نُقر عليه في المعاينة — يُعدِّله وكيل البرمجة جراحيًّا ──
+    // ── وضع التعديل: عنصر نُقر عليه في المعاينة أو نصّ تعديل — يُقترح أولاً ثم يُنفّذ بعد موافقة المستخدم ──
     if (mode && mode.edit) {
-      const elem = mode.edit.element
-      setStatus(email, 'Coding', 'running', 'يُعدّل العنصر المحدد…')
-      feed(email, 'Coding', '—', `✂️ تعديل العنصر ${elem?.tag ? `<${elem.tag}>` : 'المحدد'} — ${userMessage.slice(0, 120)}`, 'edit')
+      const elem = mode.edit.element || null
+      const runMode = mode.edit.propose ? 'propose' : 'edit'
+      const root = mode.edit.root || null
+      setStatus(email, 'Coding', 'running', runMode === 'propose' ? 'يحضّر مقترح التعديل…' : 'يُعدّل العنصر المحدد…')
+      feed(email, 'Coding', '—', `${runMode === 'propose' ? '📋 اقتراح تعديل' : '✂️ تعديل'} ${elem?.tag ? `<${elem.tag}>` : ''} — ${userMessage.slice(0, 120)}`, runMode === 'propose' ? 'propose' : 'edit')
       setProgress(email, 25, 'editing')
       let out = ''
-      for await (const ev of runCoding(user, userMessage, { mode: 'edit', element: elem })) {
+      for await (const ev of runCoding(user, userMessage, { mode: runMode, element: elem, root })) {
         if (ev.type === 'answer') out = ev.content
         yield ev
       }
-      record(email, { role: 'assistant', content: out || 'تم التعديل.' }, 'Coding', sessionId)
+      record(email, { role: 'assistant', content: out || (runMode === 'propose' ? 'اقتراح التعديل جاهز.' : 'تم التعديل.') }, 'Coding', sessionId)
       agentMemory(email, 'Coding', 'assistant', (out || 'تم التعديل.').slice(0, 1500))
       setProgress(email, 100, 'done')
       stageAllIdle(email)
       emitBrain(email)
-      setStatus(email, 'Coding', 'done', 'اكتمل التعديل ✓')
-      yield { type: 'answer', agent: 'Coding', content: out || 'تم التعديل.' }
+      setStatus(email, 'Coding', 'done', runMode === 'propose' ? 'اقتراح التعديل جاهز — بانتظار موافقتك ✓' : 'اكتمل التعديل ✓')
+      yield { type: 'answer', agent: 'Coding', content: out || (runMode === 'propose' ? 'اقتراحي جاهز — اضغط «نفّذ» لتطبيقه.' : 'تم التعديل.') }
       return
     }
 
@@ -693,26 +715,41 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
 
       let result
       const rt = String(t.agent).toLowerCase()
-      if (rt === 'coding' && looksLikeBuild(t.goal)) {
+      const editIntent = !mode.refresh && liveProjectFor(user.email) && EDIT_ASK_RE.test(t.goal)
+      if (rt === 'coding' && (looksLikeBuild(t.goal) || editIntent)) {
         setStatus(email, 'Coding', 'running', mode.refresh ? 'تحديث ملخص المشروع' : 'يبني وينفّذ في مساحة العمل…')
         if (mode.refresh) {
           const mem = contextBlock(email, userMessage)
           result = { content: mem ? `ملخص المشروع الحالي (Fresh):\n${mem}` : 'آخر بناء مسجّل.' }
-        } else if (prefs.pipeline !== false) {
-          for await (const ev of runBuildPipeline(user, t.goal)) {
-            if (ev.type === 'answer') result = { content: ev.content }
-            yield ev
-          }
-          if (!result) result = { content: 'انتهت مهمة البناء.' }
         } else {
-          for await (const ev of runCoding(user, t.goal)) {
-            if (ev.type === 'answer') result = { content: ev.content }
-            yield ev
+          // ── تعديل باللغة الطبيعية على موقع قائم: يقترح أولاً ثم ينتظر موافقة المستخدم ──
+          const editProj = !mode.refresh ? liveProjectFor(user.email) : null
+          const isEditAsk = EDIT_ASK_RE.test(t.goal)
+          if (editProj && isEditAsk && !/ابن|انشئ|اصنع|اعمل لي|أسوي/.test(t.goal)) {
+            setStatus(email, 'Coding', 'running', 'يحضّر مقترح التعديل على موقعك الحالي…')
+            feed(email, 'Coding', '—', `📋 اقتراح تعديل على «${editProj.name}» — ${t.goal.slice(0, 120)}`, 'propose')
+            let out2 = ''
+            for await (const ev of runCoding(user, t.goal, { mode: 'propose', element: null, root: (editProj.root || '.') })) {
+              if (ev.type === 'answer') out2 = ev.content
+              yield ev
+            }
+            result = { content: out2 || 'اقتراح التعديل جاهز.' }
+            setStatus(email, 'Coding', 'done', 'اقتراح التعديل جاهز — بانتظار موافقتك ✓')
+          } else if (prefs.pipeline !== false) {
+            for await (const ev of runBuildPipeline(user, t.goal)) {
+              if (ev.type === 'answer') result = { content: ev.content }
+              yield ev
+            }
+            if (!result) result = { content: 'انتهت مهمة البناء.' }
+          } else {
+            for await (const ev of runCoding(user, t.goal)) {
+              if (ev.type === 'answer') result = { content: ev.content }
+              yield ev
+            }
+            if (!result) result = { content: 'انتهت مهمة البناء.' }
           }
-          if (!result) result = { content: 'انتهت مهمة البناء.' }
         }
         setStatus(email, 'Coding', 'done', 'اكتمل البناء')
-      } else if (rt === 'genie') {
         setStatus(email, 'Genie', 'running', 'ينفّذ أمنيتك بكل قدراته…')
         try {
           result = await runGenie(user, t.goal)

@@ -49,6 +49,12 @@ export interface EditElement {
   file?: string | null
   line?: number | null
 }
+export interface EditPending {
+  element?: EditElement | null
+  root?: string | null
+  request: string
+  summary: string
+}
 export interface ProjectInfo {
   id: string
   name: string
@@ -157,6 +163,7 @@ interface AppState {
   codeFileContent: string | null
   editTarget: EditElement | null
   editBusy: boolean
+  editPend: EditPending | null
 
   projects: ProjectInfo[]
   prjOpen: boolean
@@ -254,6 +261,7 @@ interface AppState {
   setCodeFileContent: (c: string | null) => void
   setEditTarget: (e: EditElement | null) => void
   setEditBusy: (b: boolean) => void
+  setEditPend: (p: EditPending | null) => void
 
   setProjects: (p: ProjectInfo[]) => void
   upsertProject: (p: ProjectInfo) => void
@@ -300,6 +308,7 @@ export const useApp = create<AppState>((set, get) => ({
   codeFileContent: null,
   editTarget: null,
   editBusy: false,
+  editPend: null,
 
   projects: [],
   prjOpen: false,
@@ -354,7 +363,7 @@ export const useApp = create<AppState>((set, get) => ({
     set({
       user: null, token: null, msgs: [], arenaOpen: false, activity: [],
       termLines: [], previewUrl: null, deployState: 'idle', deployUrl: null,
-      codingOpen: false, codingShot: null, codeFiles: [], activeCodeFile: null, codeFileContent: null, editTarget: null, editBusy: false,
+      codingOpen: false, codingShot: null, codeFiles: [], activeCodeFile: null, codeFileContent: null, editTarget: null, editBusy: false, editPend: null,
       brainOpen: false, sessionsOpen: false, resumeText: null, resumeTitle: null, brainBoard: {}, brainProgress: 0, brainPhase: 'idle', brainFeed: [], brainPaused: false,
 prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', speechOut: false, paused: false, interval: 0, team: true, models: {} },
     })
@@ -364,7 +373,7 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
     try {
       localStorage.removeItem('ghn_msgs')
     } catch { /* noop */ }
-    set({ msgs: [], activity: [], arenaOpen: false, termOpen: false, termLines: [], previewUrl: null, deployState: 'idle', codingOpen: false, codingShot: null, codeFiles: [], editTarget: null, editBusy: false })
+    set({ msgs: [], activity: [], arenaOpen: false, termOpen: false, termLines: [], previewUrl: null, deployState: 'idle', codingOpen: false, codingShot: null, codeFiles: [], editTarget: null, editBusy: false, editPend: null })
   },
 
   setBrainOpen: (b) => set({ brainOpen: b }),
@@ -573,6 +582,8 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
   setEditTarget: (e) => set({ editTarget: e, editBusy: false }),
 
   setEditBusy: (b) => set({ editBusy: b }),
+
+  setEditPend: (p) => set({ editPend: p }),
 
   setProjects: (p) => set({ projects: p }),
 

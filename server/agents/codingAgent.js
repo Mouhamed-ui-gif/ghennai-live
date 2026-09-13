@@ -1,4 +1,5 @@
 import path from 'path'
+import fs from 'fs'
 import tools from '../tools/registry.js'
 import { generate } from '../lib/modelRouter.js'
 import { emitUser } from '../lib/events.js'
@@ -8,6 +9,7 @@ import { contextBlock, rememberProject } from '../lib/memory.js'
 import { seedTemplates } from '../lib/templateKit.js'
 import { repairUserSites, validateUserSite } from '../lib/siteDoctor.js'
 import { ensureProject, setProjectMeta, snapshotProject, listVersions, guessProjectRoot, siteRootFor } from '../lib/projects.js'
+import { publishSite } from '../lib/publisher.js'
 
 const MAX_ITERATIONS = 12
 const MAX_TYPED_CHARS = 30000
@@ -50,6 +52,23 @@ INSTRUCTIONS:
 4. Reply with a one-line Arabic confirmation: what changed and where (file + element).
 If the change is not feasible, say exactly why and suggest the closest alternative.`
 
+const PROPOSE_PROMPT = (element, userMessage) => `You are GHENNAI's Coding Agent in PROPOSAL MODE — you plan a change but NEVER apply it. The user requested an edit and must approve it before anything is modified (safety rule).
+
+ELEMENT CLICKED (inspect it in the source files, may be null for text requests):
+${JSON.stringify(element || {})}
+
+USER'S REQUESTED EDIT:
+${userMessage}
+
+INSTRUCTIONS:
+1. Read the relevant source file(s) only to LOCATE the exact code that renders the element / holds the text to change (match by id, class, tag, or visible text).
+2. Do NOT call writeFile, replaceInFile, runTerminal, or deleteFile — reading (readFile / listDir) is allowed. Never modify anything.
+3. Reply with a SHORT numbered plan in the user's language (~80-120 words):
+   1) أين سأعدّل — اسم الملف + العنصر/السطر الذي وجدتُه (مع القليل من السياق الحالي).
+   2) ماذا سأغيّر بالضبط (قبل ← بعد).
+   3) تأكيد أنني لن أمسّ أي جزء آخر من الموقع.
+End with the line: «هل أوافق على هذا التعديل؟» so the user can approve.`
+
 const SYSTEM_PROMPT = `You are GHENNAI's autonomous Coding Agent — a senior full-stack product engineer. You build PROFESSIONAL, production-grade websites inside the user's workspace.
 
 You build real projects by actually using tools:
@@ -57,18 +76,21 @@ You build real projects by actually using tools:
 - terminal: run shell commands (bash) INSIDE the workspace to scaffold, install (npm), run and test. Set "cwd" to the relative folder (default ".").
 
 TEMPLATES:
-A folder "_ghennai/templates" exists in the workspace with ready premium templates: "modern-saas", "portfolio", "restaurant". Each has index.html + style.css + app.js.
+A folder "_ghennai/templates" exists in the workspace with ready premium templates: "modern-saas", "portfolio", "restaurant", "agency", "store". Each has index.html + style.css + app.js.
 - Pick the template closest to the request, COPY its folder to the project root, then READ and EDIT those files to match the user's request precisely (content, colors, sections). This gives a professional result fast.
 - If no template fits, build from scratch following the DESIGN RULES below.
 
 PROFESSIONAL DESIGN RULES (apply always):
+0. ANY SITE TYPE: whatever the user asks for (company, shop, coffee, clinic, real estate, school, gym, personal, app landing...), deliver a complete, premium, production-grade site — never a generic skeleton. Match the brand and purpose deeply.
 1. Structure: sticky glass navbar (logo + links + CTA button), hero with headline + subtext + primary CTA + trust badge, features grid (3-6 cards with icons), "how it works" steps, stats strip, testimonials, pricing (3 tiers) or portfolio grid, FAQ (accordion), final CTA, rich footer with columns.
-2. Visual polish: deep dark theme with a vibrant gradient accent (indigo→cyan or violet→pink), radial glow behind hero, glass cards (rgba background + border + backdrop-filter), soft shadows, rounded-2xl corners, small "chip" badges, gradient text for headlines (background-clip:text), animated buttons with hover lift/glow.
-3. Typography: system font stack with Tajawal/Cairo fallback + Inter; clamp() responsive type scale (headline ~clamp(2.2rem,6vw,4rem)); generous line-height and spacing.
-4. Interactivity: mobile hamburger menu, smooth scroll, scroll-reveal (IntersectionObserver adding .in), hover/tilt effects on cards, subtle animated gradient "aurora" blobs in hero, counters animating, FAQ accordion, back-to-top button.
-5. Responsive & quality: mobile-first grid (grid-template-columns: repeat(auto-fit,minmax(...))), media queries, prefers-reduced-motion support, semantic HTML5, valid CSS, no broken links — use real placeholder images from https://images.unsplash.com or https://picsum.photos when images are needed.
-6. Localization: if the request or UI language is Arabic, set <html lang="ar" dir="rtl"> and write content in Arabic; keep bilingual nav simple.
-7. Always include: meta description, viewport, favicon (inline SVG data URI), and a comment header per file.
+2. LEGENDARY HERO BACKGROUND (mandatory; never flat): deep dark base with an immersive backdrop — animated multi-stop gradient mesh, large soft radial glows, floating "aurora" blobs with blur that drift (CSS @keyframes), subtle noise/grain or light beams, optionally a high-quality hero image from https://images.unsplash.com layered under a gradient. Add at least one floating/animated element (glow orb, particles, gradient text shimmer).
+3. Visual polish: deep dark theme with a vibrant gradient accent (indigo→cyan or violet→pink or emerald→cyan), radial glow behind hero, glass cards (rgba background + border + backdrop-filter), soft shadows, rounded-2xl corners, small "chip" badges, gradient text for headlines (background-clip:text), animated buttons with hover lift/glow.
+4. Typography: system font stack with Tajawal/Cairo fallback + Inter; clamp() responsive type scale (headline ~clamp(2.2rem,6vw,4rem)); generous line-height and spacing.
+5. Interactivity: mobile hamburger menu, smooth scroll, scroll-reveal (IntersectionObserver adding .in), hover/tilt effects on cards, animated hero, counters animating, FAQ accordion, back-to-top button.
+6. MULTI-PAGE SITES: if the request implies several pages (خدمات/من نحن/تواصل/معرض/aside or a real multi-page site), build index.html + about.html + services.html + contact.html (etc.) INSIDE the project folder — each a complete standalone HTML file with the same navbar/footer and WORKING relative links between them (href="about.html", "services.html", "contact.html") plus shared style.css and a shared app.js linked by every page. Do not build multi-page as <section> stubs.
+7. Responsive & quality: mobile-first grid (grid-template-columns: repeat(auto-fit,minmax(...))), media queries, prefers-reduced-motion support, semantic HTML5, valid CSS, no broken links — use real placeholder images from https://images.unsplash.com or https://picsum.photos when images are needed.
+8. Localization: if the request or UI language is Arabic, set <html lang="ar" dir="rtl"> and write content in Arabic; keep bilingual nav simple.
+9. Always include: meta description, viewport, favicon (inline SVG data URI), and a comment header per file.
 
 RULES:
 1. Actually DO the work with tools. Never claim something was created unless a tool succeeded and a verification tool (readFile or ls) confirmed it.
@@ -201,11 +223,11 @@ function toCallParams(name, args) {
   }
 }
 
-async function runTool(user, name, args, onTerm) {
+async function runTool(user, name, args, onTerm, baseWs = null) {
   const agentTool = toolSchemaMap()[name]
   if (!agentTool) return { ok: false, error: `unknown tool: ${name}` }
   const tool = tools[agentTool]
-  const ws = userWorkspace(user.email)
+  const ws = baseWs || userWorkspace(user.email)
   const params = { workspace: ws, cwd: '.', ...toCallParams(name, args || {}) }
   if (agentTool === 'filesystem' && params.cwd) delete params.cwd
   if (agentTool === 'terminal') {
@@ -245,16 +267,18 @@ async function* runCoding(user, userMessage, opts = {}) {
   const ws = userWorkspace(user.email)
   await seedTemplates(user.email)
   const editMode = opts?.mode === 'edit'
-  const memory = editMode ? '' : contextBlock(user.email, userMessage)
+  const proposeMode = opts?.mode === 'propose'
+  let toolBaseWs = ws
+  const memory = editMode || proposeMode ? '' : contextBlock(user.email, userMessage)
   const messages = []
   let workingRoot = '.'
-  if (editMode) {
+  if (editMode || proposeMode) {
     if (opts.root) workingRoot = guessProjectRoot(ws, opts.root) || '.'
-    yield { type: 'coding_start', project: detectProjectName(userMessage), request: userMessage, mode: 'edit', element: opts.element || null, root: opts.root || null }
-    messages.push({ role: 'system', content: EDIT_SYSTEM_PROMPT(opts.element || null, userMessage) })
+    yield { type: 'coding_start', project: detectProjectName(userMessage), request: userMessage, mode: proposeMode ? 'propose' : 'edit', element: opts.element || null, root: opts.root || null }
+    messages.push({ role: 'system', content: proposeMode ? PROPOSE_PROMPT(opts.element || null, userMessage) : EDIT_SYSTEM_PROMPT(opts.element || null, userMessage) })
     messages.push({
       role: 'user',
-      content: `Workspace root: ${ws}\nThis project's folder: "${workingRoot}" — read/edit files ONLY inside it.\n\nThe user clicked this element in their live preview and wants this change applied.\nRead the source files first, then use replaceInFile (or writeFile as a last resort). Verify before replying.`,
+      content: `Workspace root: ${ws}\nThis project's folder: "${workingRoot}". Use filesystem paths RELATIVE to that folder (e.g. "style.css", "index.html", "app.js") — never prefix them with the folder name.\n\n${proposeMode ? 'The user wants this change applied ONLY AFTER approval. Produce the numbered plan now (read-only).' : 'The user approved the proposal. Apply this change now: read the source files first, then use replaceInFile (or writeFile as a last resort). Verify before replying.'}\n\nUser request: ${userMessage}`,
     })
   } else {
     const projectName = detectProjectName(userMessage)
@@ -272,6 +296,10 @@ async function* runCoding(user, userMessage, opts = {}) {
           `\n(ملاحظة نظام: إذا سُئلت من صنعك / من الذي صنعك / من برمجك / who created you؟ فأجب أن صانعك هو **محمد غناي (Mohamed Ghennay)** المطوّر الوحيد لـ GHENNAI.)`,
       },
     )
+  }
+
+  if ((editMode || proposeMode) && workingRoot && workingRoot !== '.') {
+    toolBaseWs = path.resolve(ws, workingRoot)
   }
 
   let built = false
@@ -301,6 +329,16 @@ async function* runCoding(user, userMessage, opts = {}) {
     const toolCalls = res.toolCalls || []
     if (!toolCalls.length) {
       runRepairs(user)
+
+      // ── وضع الاقتراح: يخطط فقط، والمستخدم يوافق قبل أي تعديل ──
+      if (proposeMode) {
+        if (res.content) yield* yieldTyped(res.content, { rate: 5, chunk: 120 })
+        yield { type: 'code_token', action: 'done' }
+        yield { type: 'edit_proposal', element: opts.element || null, root: workingRoot, request: userMessage, summary: res.content || '' }
+        yield { type: 'coding_done', built: false, content: res.content || '' }
+        yield { type: 'answer', content: res.content || 'اقتراحي جاهز — اضغط «نفّذ» لتطبيق التعديل.' }
+        return
+      }
 
       // ── الفحص الشامل قبل إعلان النجاح ──
       const root = workingRoot
@@ -334,11 +372,23 @@ async function* runCoding(user, userMessage, opts = {}) {
         /* النسخ الاحتياطي اختياري */
       }
 
-      if (res.content) yield* yieldTyped(res.content, { rate: 5, chunk: 120 })
+      // ── النشر التلقائي: بعد نجاح بناء موقع جديد يُنشر فورًا ورابطه يُعلن هنا ──
+      let publishResult = null
+      if (!editMode && (built || (attempts > 0 && fs.existsSync(path.join(toolBaseWs, 'index.html'))))) {
+        try {
+          publishResult = await publishSite({ email: user.email, name: user.name, folder: root === '' ? '.' : root, allowCli: true })
+        } catch {
+          publishResult = null
+        }
+      }
+      const summary = res.content || ''
+      const withLink = publishResult?.ok && publishResult?.url ? `${summary}\n\n🔗 موقعك على الإنترنت الآن — افتحه من الزر:\n${publishResult.url}` : summary
+
+      if (withLink) yield* yieldTyped(withLink, { rate: 5, chunk: 120 })
       yield { type: 'code_token', action: 'done' }
-      yield { type: 'coding_done', built: built || attempts > 0, content: res.content || '', version: nextVersion }
-      yield { type: 'answer', content: res.content || 'انتهت المهمة.' }
-      rememberProject(user.email, 'last', { summary: String(res.content).slice(0, 400), ts: Date.now() })
+      yield { type: 'coding_done', built: built || attempts > 0, content: withLink, version: nextVersion, url: (publishResult && publishResult.ok && publishResult.url) || null }
+      yield { type: 'answer', content: withLink || (publishResult && !publishResult.ok ? `نُشئ الموقع ✓ ${publishResult.error ? '\n' + publishResult.error : ''}` : 'انتهت المهمة.') }
+      rememberProject(user.email, 'last', { summary: String(summary).slice(0, 400), ts: Date.now() })
       return
     }
 
@@ -355,6 +405,12 @@ async function* runCoding(user, userMessage, opts = {}) {
       if (typeof args === 'string') {
         try { args = JSON.parse(args) } catch { args = {} }
       }
+      if ((editMode || proposeMode) && typeof args?.path === 'string' && workingRoot && workingRoot !== '.') {
+        const bare = workingRoot.replace(/\/+$/, '')
+        const p = args.path
+        const prefixed = bare + '/'
+        args.path = p === bare ? '.' : p.startsWith(prefixed) ? p.slice(bare.length + 1) : p
+      }
       if (name === 'writeFile' && args?.content) {
         yield { type: 'code_token', action: 'open', file: args.path }
         await sleep(120)
@@ -365,7 +421,7 @@ async function* runCoding(user, userMessage, opts = {}) {
       }
       const result = await runTool(user, name, args || {}, (kind, chunk) => {
         emitUser(user.email, { type: 'terminal_data', kind, data: chunk })
-      })
+      }, toolBaseWs)
       if (!result.ok) allOk = false
       else if (name === 'runTerminal' || name === 'writeFile') built = true
       attempts++
