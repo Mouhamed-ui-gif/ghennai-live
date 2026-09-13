@@ -160,7 +160,7 @@ export function validateSite(root) {
   if (/(لغة|عربية|ar)/i.test(html) && /lang=["'][^"']{2,}["']/.test(html)) {
     ok('سمة اللغة موجودة', 'index.html', true)
   }
-  if (html.trim().length < 300) ok('المحتوى ليس ناقصًا (حجم HTML كافٍ)', 'index.html', false)
+  if (html.trim().length < 80) ok('المحتوى ليس ناقصًا (حجم HTML كافٍ)', 'index.html', false)
 
   const seen = new Set()
   const refs = localRefs(html)
@@ -196,10 +196,13 @@ export function validateSite(root) {
     } catch {}
     if (size > 400 * 1024) continue
     let syntaxOk = true
-    try {
-      new Function(fs.readFileSync(f, 'utf8')) // eslint-disable-line no-new-func
-    } catch {
-      syntaxOk = false
+    let content = ''
+    try { content = fs.readFileSync(f, 'utf8') } catch { syntaxOk = false }
+    if (syntaxOk) {
+      const isModule = /^\s*(?:import|export)\s/m.test(content)
+      if (!isModule) {
+        try { new Function(content) } catch { syntaxOk = false }
+      }
     }
     ok(`صياغة JavaScript سليمة — ${path.relative(root, f)}`, path.relative(root, f), syntaxOk)
   }

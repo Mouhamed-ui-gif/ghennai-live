@@ -542,11 +542,14 @@ async function retryText(user, agent, system, userMessage) {
 }
 
 /** هل الطلب طلبُ بناء حقيقي؟ (حارس اختصاص Coding: لا يبني إجابةً تُطلب كمعلومة) */
+const ASK_WORDS = /(ما هو|ما هي|لماذا|ما سبب|كيف (اطلب|استخدم|اتعلم|اشغل|احسب|اكتب|أتعامل)|عرفني|اشرح|شرح لي|تعريف|ما معنى|أخبرني|قل لي|من هو|من هي|تاريخ|قصة|فلسفة|دين)/i
+const BUILD_WORDS = /(ابن|بني|ابني|انشئ|انشاء|إنشاء|اصنع|اعمل لي|أسوي|برمجة|برمج|كود|كواد|موقع|مواقع|تطبيق|تطبيقات|صفحة ويب|لوحة تحكم|قالب|تعديل|أصلح|إصلاح|react|html|css|vite|fastapi|داجنغو)/i
+const STRONG_BUILD = /(ابن|ابني|بني|انشئ|إنشاء|اصنع|اعمل لي|أسوي|اكتب لي كود|برمج لي|عطيني كود|كود لي|موقع لي|صفحة لي|تطبيق لي|لوحة تحكم لي)/i
 function looksLikeBuild(goal) {
   const m = String(goal || '').toLowerCase()
-  const asks = /(ما هو|ما هي|لماذا|ما سبب|كيف (اطلب|استخدم|اتعلم|اشغل|احسب|اكتب|أتعامل)|عرفني|اشرح|شرح لي|تعريف|ما معنى|أخبرني|قل لي|من هو|من هي|تاريخ|قصة|فلسفة|دين)/.test(m)
-  const build = /(ابن|بني|ابني|انشئ|انشاء|إنشاء|اصنع|اعمل لي|أسوي|برمجة|برمج|كود|كواد|موقع|مواقع|تطبيق|تطبيقات|صفحة ويب|لوحة تحكم|قالب|تعديل|أصلح|إصلاح|react|html|css|vite|fastapi|داجنغو)/.test(m)
-  return build && !asks
+  if (!BUILD_WORDS.test(m)) return false
+  if (STRONG_BUILD.test(m)) return true
+  return !ASK_WORDS.test(m)
 }
 
 /** ═══════════ القاعدة الحديدية: اختصاص كل وكيل بلا تداخل ═══════════ */
@@ -648,19 +651,14 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
       return
     }
 
-    // القاعدة الحديدية: وكيل صريح يلتقي طلبًا خارج اختصاصه → اعتذار لطيف + إحالة فورية
+    // القاعدة الحديدية: وكيل صريح يلتقي طلبًا خارج اختصاصه → إحالة فورية فعلية (لا اعتذار فقط)
+    let effectiveRequested = requested
     if (explicitAgent && requested && !mode.refresh) {
       const defer = maybeDefer(String(requested), userMessage)
       if (defer) {
-        setStatus(email, String(requested), 'done', defer.answer.slice(0, 120))
-        feed(email, String(requested), defer.to, defer.answer)
-        record(email, { role: 'assistant', content: defer.answer }, String(requested), sessionId)
-        agentMemory(email, String(requested), 'assistant', defer.answer.slice(0, 1500))
-        setProgress(email, 100, 'done')
-        stageAllIdle(email)
-        emitBrain(email)
-        yield { type: 'answer', agent: String(requested), content: defer.answer }
-        return
+        effectiveRequested = defer.to
+        setStatus(email, String(requested), 'done', `أُحيل الطلب فورًا إلى ${SCOPE_LABEL[defer.to] || defer.to} ⚡`)
+        feed(email, String(requested), defer.to, `إحالة فورية — «${SCOPE_LABEL[String(requested)] || String(requested)}» يُمرّر الطلب لزميله المختص ${SCOPE_LABEL[defer.to] || defer.to} ⚡`)
       }
     }
 
@@ -675,7 +673,7 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
 
     const targets = steps?.length
       ? steps.map((st) => ({ agent: String(st.agent).toLowerCase() === 'coding' ? 'coding' : String(st.agent).toLowerCase(), goal: String(st.goal || userMessage) }))
-      : [{ agent: await route(userMessage, requested), goal: userMessage }]
+      : [{ agent: await route(userMessage, effectiveRequested), goal: userMessage }]
 
     // ── LEGENDARY TEAM MODE: kickoff a parallel second-opinion agent (يُعطَّل في الوضع المستقل) ──
     const team = getPrefs(email).team
@@ -709,14 +707,14 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
         feed(email, agentLabel(targets[ti - 1].agent), agentLabel(t.agent), `مُسلَّم: ${String(finalOutput).slice(0, 120)}…`, 'handoff')
       }
 
-      await withSpeed(email)
+      const rt = String(t.agent).toLowerCase()
+      if (rt !== 'coding') await withSpeed(email)
       if (getPrefs(email).paused) throw new PausedError('⏸️ متوقف مؤقتًا')
       setProgress(email, Math.round(15 + ((done / Math.max(1, total)) * 70)), `agent:${agentId}`)
 
       let result
-      const rt = String(t.agent).toLowerCase()
       const editIntent = !mode.refresh && liveProjectFor(user.email) && EDIT_ASK_RE.test(t.goal)
-      if (rt === 'coding' && (looksLikeBuild(t.goal) || editIntent)) {
+      if (editIntent || (rt === 'coding' && looksLikeBuild(t.goal))) {
         setStatus(email, 'Coding', 'running', mode.refresh ? 'تحديث ملخص المشروع' : 'يبني وينفّذ في مساحة العمل…')
         if (mode.refresh) {
           const mem = contextBlock(email, userMessage)
@@ -750,14 +748,6 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
           }
         }
         setStatus(email, 'Coding', 'done', 'اكتمل البناء')
-        setStatus(email, 'Genie', 'running', 'ينفّذ أمنيتك بكل قدراته…')
-        try {
-          result = await runGenie(user, t.goal)
-        } catch (err) {
-          feed(email, 'Brain', 'Genie', `فشلت المحاولة الأولى (${String(err.message).slice(0, 60)}) — إعادة بمنحى مختلف`, 'retry')
-          result = await retryText(user, 'Genie', systemFor('Genie'), t.goal)
-        }
-        setStatus(email, 'Genie', 'done', 'اكتمل التنفيذ ✓')
       } else {
         setStatus(email, agentName, 'running', agentVerb(agentName))
         try {

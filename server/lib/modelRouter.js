@@ -8,6 +8,8 @@ const CLOUD_TIMEOUT_MS = Number(process.env.CLOUD_TIMEOUT_MS || 40000)
 const CLOUD_HEADSTART_MS = Number(process.env.CLOUD_HEADSTART_MS || 15000)
 /** ترتيب أولوية الجودة: النموذج الأقوى أولًا، والباقي احتياط فوري */
 const PROVIDER_PRIORITY = (process.env.PROVIDER_PRIORITY || 'gemini,groq,openrouter,openai,anthropic').split(',').map((s) => s.trim())
+/** أولوية مزوّدات بثّ أدوات البرمجة (تسريع + live code): groq أسرع ثم openrouter ثم openai */
+const TOOL_STREAM_PRIORITY = (process.env.TOOL_STREAM_PRIORITY || 'groq,openrouter,openai').split(',').map((s) => s.trim())
 
 /** تعقّب "كلفة الحالة": عندما يعيد أي مزوّد 429 (حدّ الاستخدام/الحصّة)، نجمّده مؤقتًا بدل ضربه بلا فائدة */
 const blocked = new Map()
@@ -560,6 +562,198 @@ async function streamOllama(options, messages, onToken, onDone) {
 }
 
 export { generate, streamChat, cloudProviders, chooseModel, ollamaIsAvailable, OLLAMA_URL }
+
+/** تتبّع حالة أداة أثناء بث وسائطها */
+function trackToolsState() {
+  const m = new Map()
+  return {
+    delta(index, id, name, argsDelta) {
+      let s = m.get(index)
+      if (!s) {
+        s = { id, name, args: '', prevDec: 0 }
+        m.set(index, s)
+      }
+      if (id) s.id = id
+      if (name) s.name = name
+      s.args += argsDelta || ''
+      return s
+    },
+    pathOf(s) {
+      const x = /"path"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(s.args)
+      return x ? x[1] : null
+    },
+    contentSpan(s) {
+      const pat = /"content"\s*:\s*"((?:[^"\\]|\\.)*)"/g
+      let raw = ''
+      let p
+      while ((p = pat.exec(s.args))) raw = p[1]
+      if (!raw) return { file: this.pathOf(s), delta: '' }
+      let dec = ''
+      try { dec = JSON.parse(`"${raw}"`) } catch { dec = raw }
+      const delta = dec.length > s.prevDec ? dec.slice(s.prevDec) : ''
+      s.prevDec = Math.max(s.prevDec, dec.length)
+      return { file: this.pathOf(s), delta }
+    },
+    calls() {
+      return [...m.values()].map((s) => ({ id: s.id, type: 'function', function: { name: s.name, arguments: s.args } }))
+    },
+  }
+}
+
+/** قراءة خطية (مولّدة) لتدفق JSON: AI يمكن للمتصل أن يثمر بين قراءات */
+async function* readNdjsonLines(url, options, signal) {
+  const controller = new AbortController()
+  const t = setTimeout(() => controller.abort(), CLOUD_TIMEOUT_MS * 2)
+  const sig = signal || controller.signal
+  let res
+  try {
+    res = await fetch(url, { ...options, signal: sig })
+  } catch (err) {
+    clearTimeout(t)
+    throw err
+  }
+  if (!res.ok || !res.body) {
+    clearTimeout(t)
+    const txt = await res.text().catch(() => '')
+    throw new Error(`stream http ${res.status}: ${txt.slice(0, 160)}`)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    let chunk
+    try {
+      chunk = await reader.read()
+    } catch {
+      break
+    }
+    if (chunk.done) break
+    buf += decoder.decode(chunk.value, { stream: true })
+    let nl = buf.indexOf('\n')
+    while (nl !== -1) {
+      const line = buf.slice(0, nl).trim()
+      buf = buf.slice(nl + 1)
+      if (line) yield line
+      nl = buf.indexOf('\n')
+    }
+  }
+  clearTimeout(t)
+}
+
+/**
+ * بثّ البرمجة الحقيقي: يولّد أحداثًا فور وصولها.
+ *  - {kind:'text', text}           شرَدة شرح (يذهب لمسجّل المحادثة)
+ *  - {kind:'toolArgs', file?, delta}  محتوى ملف يُكتب الآن (يذهب لعارض الكود + المعاينة)
+ *  - {kind:'fix', message}訊息 خطأ واصل
+ *  - {kind:'done', result}         {content, toolCalls, provider}
+ * الترتيب: groq → openrouter → openai → بقية السحابة → ollama → generate() غير المدفّق.
+ */
+export async function* codestreamGen(options = {}) {
+  const withTools = !!(options.tools?.length)
+  const messages = normalizeMessages(options)
+  const tracker = trackToolsState()
+  let lastErr = null
+
+  const wantLocalFirst = options.provider === 'ollama'
+  const cloudCands = priorityProviders(withTools)
+  const ordered = [
+    ...TOOL_STREAM_PRIORITY.map((n) => cloudCands.find(([name]) => name === n)).filter(Boolean),
+    ...cloudCands.filter(([name]) => !TOOL_STREAM_PRIORITY.includes(name)),
+  ]
+
+  const tryChain = wantLocalFirst ? [null, ...(ordered.length ? ordered.map((o) => o) : [])] : [...ordered, null]
+  for (const cand of tryChain) {
+    if (cand === null) {
+      if (!(await ollamaIsAvailable())) continue
+      try {
+        yield* streamOllamaToolsGen(options, messages)
+        return
+      } catch (e) {
+        lastErr = String(e?.message || e)
+        continue
+      }
+    }
+    const [name, p] = cand
+    if (name === 'gemini' || name === 'anthropic') {
+      const r = await cloudChat({ name, ...p }, options, messages).catch((e) => ({ ok: false, error: String(e) }))
+      if (r?.ok && (String(r.content || '').trim() || r.toolCalls?.length)) {
+        if (r.content) yield { kind: 'text', text: r.content }
+        yield { kind: 'done', result: { ...r, streamed: false } }
+        return
+      }
+      lastErr = r?.error || lastErr
+      continue
+    }
+    try {
+      yield* streamOpenAICompatToolsGen(name, p, options, messages, tracker)
+      return
+    } catch (e) {
+      lastErr = String(e?.message || e)
+      if (/429|quota|RESOURCE_EXHAUSTED/i.test(lastErr)) markBlocked(name)
+    }
+  }
+
+  const raced = await raceCloud(options, messages)
+  if (raced?.ok) {
+    if (raced.content) yield { kind: 'text', text: raced.content }
+    yield { kind: 'done', result: { ...raced, streamed: false } }
+    return
+  }
+  throw new Error(lastErr ? `Coding stream failed: ${lastErr}` : 'لا يوجد مولد نشط للبرمجة')
+}
+
+/** بعد اكتمال التدفق: نبثّ النتيجة فقط (الشرح بُثّ حيًا سطرًا سطرًا داخل المولد) */
+
+/** دفقة المزوّد OpenAI-المتوافق مع الأدوات: يولّد أحداثًا حيّة أثناء القراءة + حدث done */
+async function* streamOpenAICompatToolsGen(name, p, options, messages, tracker) {
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${p.key}` }
+  if (name === 'openrouter') headers['HTTP-Referer'] = 'http://localhost:3001'
+  const payload = openAIPayload(p, options, messages, true, modelForCall(p, options))
+  let full = ''
+  const seen = new Set()
+  for await (const line of readNdjsonLines(`${p.base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(payload) })) {
+    if (!line.startsWith('data:')) continue
+    const data = line.slice(5).trim()
+    if (data === '[DONE]') break
+    let j
+    try { j = JSON.parse(data) } catch { continue }
+    const d = j.choices?.[0]?.delta
+    if (!d) continue
+    if (d.content) {
+      full += d.content
+      yield { kind: 'text', text: d.content }
+    }
+    for (const tc of d.tool_calls || []) {
+      const s = tracker.delta(tc.index, tc.id, tc.function?.name, tc.function?.arguments || '')
+      const { file, delta } = tracker.contentSpan(s)
+      if (delta) {
+        if (!seen.has(file || `${tc.index}`)) seen.add(file || `${tc.index}`)
+        yield { kind: 'toolArgs', index: tc.index, file, delta }
+      }
+    }
+  }
+  const calls = tracker.calls()
+  yield { kind: 'done', result: { ok: true, provider: name, model: modelForCall(p, options), content: full, toolCalls: calls.length ? calls : null, streamed: !!full } }
+}
+
+/** بث Ollama مع جمع tool_calls (وسائط الأدوات تصل كاملة في النهاية) */
+async function* streamOllamaToolsGen(options, messages) {
+  const model = options.model || OLLAMA_MODEL
+  const chat = messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '') }))
+  const payload = { model, messages: chat, stream: true, think: options.think === false ? false : true, keep_alive: '30m', options: { num_ctx: options.numCtx || 32768 } }
+  if (options.tools?.length) payload.tools = options.tools
+  let full = ''
+  let toolCalls = null
+  let saw = false
+  for await (const line of readNdjsonLines(`${OLLAMA_URL}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })) {
+    let j
+    try { j = JSON.parse(line) } catch { continue }
+    if (j.message?.content) { saw = true; full += j.message.content; yield { kind: 'text', text: j.message.content } }
+    if (j.message?.tool_calls?.length) toolCalls = j.message.tool_calls
+  }
+  if (!saw && !toolCalls) throw new Error('ollama streaming empty')
+  yield { kind: 'done', result: { ok: true, provider: 'ollama', model, content: full, toolCalls } }
+}
 export const providers = () => ({
   ollama: OLLAMA_URL,
   ollamaModels: [OLLAMA_MODEL, OLLAMA_FALLBACK],

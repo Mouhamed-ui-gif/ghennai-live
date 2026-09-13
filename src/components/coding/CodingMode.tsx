@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
-import { Rocket, X, Loader2, Volume2, VolumeX, Pencil, Sparkles, RefreshCw, Monitor, Tablet, Smartphone, Undo2, ExternalLink, Check } from 'lucide-react'
+import { Rocket, X, Loader2, Volume2, VolumeX, Pencil, Sparkles, RefreshCw, Monitor, Tablet, Smartphone, Undo2, ExternalLink, Check, FileCode2, Timer, Layers, CircleDashed, Wand2 } from 'lucide-react'
 import { useApp, type EditElement, type FileNode } from '../../store/app'
 import { workspace, chatStream, deploy, projects as projectsApi } from '../../api/client'
 import { handleChatEvent } from '../../hooks/chatEvents'
@@ -105,6 +105,98 @@ function rewriteHtml(html: string, map: Map<string, string>, norm: (p: string) =
 const dirOf = (p: string) => (p.includes('/') ? p.split('/').slice(0, -1).join('/') || '.' : '.')
 const extLang = (p: string) => (p.endsWith('.css') ? 'css' : p.endsWith('.js') || p.endsWith('.mjs') ? 'javascript' : 'html')
 const escapeRE = (s: string) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const normP = (p: string) => p.replace(/^[\/\\]+/, '').split('?')[0]
+const fmtDur = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
+
+/** مراحل البناء المعروضة في شاشة البناء */
+const BUILD_STAGES = [
+  { label: 'استقبال الطلب', icon: <Wand2 size={16} />, key: 'plan' },
+  { label: 'تحليل وتصميم', icon: <Layers size={16} />, key: 'design' },
+  { label: 'كتابة الكود حيًّا', icon: <Sparkles size={16} />, key: 'code' },
+  { label: 'الفحص الشامل', icon: <RefreshCw size={16} />, key: 'check' },
+  { label: 'النشر على رابطك', icon: <Rocket size={16} />, key: 'deploy' },
+]
+
+function stageKeyOf(actions: { kind?: string; text: string }[]): string {
+  if (!actions.length) return 'plan'
+  let s = 'plan'
+  for (const a of actions) {
+    const t = (a.text || '').toLowerCase()
+    if (t.includes('🚀') || t.includes('نشر')) { s = 'deploy'; break }
+    if (a.kind === 'ok' && (t.includes('فحص') || t.includes('validation') || t.includes('check'))) s = 'check'
+    else if (t.includes('الفحص')) s = 'check'
+    else if (a.kind === 'cmd' || t.includes('كتب') || t.includes('build')) s = 'code'
+  }
+  return s
+}
+
+/** شاشة البناء الفاخرة: خلفية متحركة + مراحل + عدّاد + آخر أمر حي */
+function BuildOverlay({ project, stage, elapsed, actions, file }: { project: string; stage: string; elapsed: number; actions: { kind: string; text: string; ts: number; id: string }[]; file: string | null }) {
+  const idx = Math.max(0, BUILD_STAGES.findIndex((s) => s.key === stage))
+  const last = actions[actions.length - 1]
+  return (
+    <div className="absolute inset-0 z-[80] flex items-center justify-center overflow-hidden bg-night-950 text-slate-100">
+      <style>{`
+        @keyframes ghDrift { from { transform: translate3d(-20px,-30px,0) rotate(0deg) } to { transform: translate3d(40px,60px,0) rotate(24deg) } }
+        @keyframes ghPulse { 0%,100%{opacity:.3} 50%{opacity:1} }
+      `}</style>
+      <div aria-hidden className="pointer-events-none absolute -left-28 -top-28 h-96 w-96 rounded-full bg-cyan-500/20 blur-3xl" style={{ animation: 'ghDrift 8s ease-in-out infinite alternate' }} />
+      <div aria-hidden className="pointer-events-none absolute -bottom-28 -right-28 h-[28rem] w-[28rem] rounded-full bg-violet-600/20 blur-3xl" style={{ animation: 'ghDrift 11s ease-in-out infinite alternate-reverse' }} />
+      <div aria-hidden className="pointer-events-none absolute left-1/3 top-1/2 h-64 w-64 rounded-full bg-emerald-500/15 blur-3xl" style={{ animation: 'ghDrift 6s ease-in-out infinite alternate' }} />
+      <div className="relative mx-auto w-full max-w-2xl px-6 text-center">
+        <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-cyan-300 backdrop-blur">
+          <Sparkles size={13} /> تشغيل Ghennai BIOS
+        </div>
+        <h2 className="mb-1 truncate text-2xl font-black tracking-tight text-white">{project}</h2>
+        <p className="mb-8 text-sm text-slate-400">يبني لك الوكيل موقعًا كاملًا — ويُريك الكودَ وهو يُكتب حرفًا بحرف</p>
+
+        <div className="mb-8 flex items-start justify-center gap-2">
+          {BUILD_STAGES.map((s, i) => (
+            <Fragment key={s.key}>
+              <div className="flex w-20 flex-col items-center gap-1.5">
+                <div className={`flex h-9 w-9 items-center justify-center rounded-xl transition-all ${i < idx ? 'bg-emerald-500/15 text-emerald-300' : i === idx ? 'bg-cyan-500/20 text-cyan-300 ring-2 ring-cyan-400/50' : 'bg-white/5 text-slate-600'}`}>
+                  {i < idx ? <Check size={15} /> : s.icon}
+                </div>
+                <span className={`text-[10px] leading-tight ${i === idx ? 'font-bold text-cyan-300' : i < idx ? 'text-emerald-400' : 'text-slate-600'}`}>{s.label}</span>
+              </div>
+              {i < BUILD_STAGES.length - 1 && <div className={`mt-4 h-px w-8 flex-1 ${i < idx ? 'bg-emerald-400/50' : 'bg-white/10'}`} />}
+            </Fragment>
+          ))}
+        </div>
+
+        <div className="mb-6 rounded-2xl border border-white/10 bg-night-900/70 p-4 text-start backdrop-blur">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="flex items-center gap-1.5 rounded-lg bg-white/5 px-2.5 py-1 font-mono text-[11px] text-cyan-300" dir="ltr">
+              <FileCode2 size={13} /> {file || 'بانتظار الملف الأول…'}
+            </span>
+            <span className="flex items-center gap-1.5 font-mono text-[11px] text-slate-300" dir="ltr">
+              <Timer size={13} className="text-emerald-400" /> {fmtDur(elapsed)}
+            </span>
+          </div>
+          <div className="mb-3 flex h-8 items-center gap-2 overflow-hidden rounded-lg bg-night-950/70 px-3">
+            {!last ? (
+              <span className="flex items-center gap-2 text-[11px] text-slate-500">
+                <CircleDashed size={13} className="animate-spin" /> يقرأ الطلب ويحلل المتطلبات…
+              </span>
+            ) : (
+              <span className={`truncate font-mono text-[11.5px] ${KIND_COLOR[last?.kind] || 'text-slate-300'}`} dir="ltr">
+                {last?.text}
+              </span>
+            )}
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/5">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-violet-400 to-emerald-400"
+              style={{ width: `${Math.min(96, ((idx + 1) / BUILD_STAGES.length) * 100 + 6)}%`, animation: 'ghPulse 2.2s ease-in-out infinite' }}
+            />
+          </div>
+        </div>
+
+        <p className="text-[11px] text-slate-500">أي تعديل يتمّ بعد موافقتك ✓&ensp;·&ensp;الرابط يبقى ثابتًا لمشروعك&ensp;·&ensp;يمكنك العودة لأي إصدار سابق</p>
+      </div>
+    </div>
+  )
+}
 
 export function CodingMode() {
   const shot = useApp((s) => s.codingShot)
@@ -125,10 +217,13 @@ export function CodingMode() {
   const [picking, setPicking] = useState(false)
   const [editText, setEditText] = useState('')
   const [publishing, setPublishing] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const blobsRef = useRef<string[]>([])
   const logRef = useRef<HTMLDivElement | null>(null)
   const docsRef = useRef<Map<string, string>>(new Map())
+  const liveRef = useRef<{ files: { rel: string; content: string }[]; base: string | null }>({ files: [], base: null })
+  const startedRef = useRef<number | null>(null)
 
   const locateElement = (el: EditElement): { file: string; line: number | null } => {
     let content: string | null = docsRef.current.get('index.html') ?? null
@@ -154,9 +249,35 @@ export function CodingMode() {
     return { file, line: null }
   }
 
+  /** يُرسم المعاينة من قائمة ملفات في الذاكرة (الوصول الخلفي أو الحي) */
+  const applyDoc = useCallback((files: { rel: string; content: string }[], base: string | null, quiet = false) => {
+    liveRef.current = { files, base }
+    const newBlobs: string[] = []
+    for (const f of files) {
+      newBlobs.push(URL.createObjectURL(new Blob([f.content], { type: mimeFor(f.rel) })))
+      if (/\.(html?)$/.test(f.rel)) docsRef.current.set(f.rel, f.content)
+    }
+    const map = new Map(files.map((f, i) => [normP(f.rel), newBlobs[i]]))
+    const idx = files.find((f) => /^index\.html?$/.test(normP(f.rel))) || files.find((f) => /\/index\.html?$/.test(normP(f.rel)))
+    if (idx) {
+      const dir = idx.rel.replace(/[^/]*$/, '')
+      const resolveRel = (p: string) => (p.startsWith('/') ? normP(p) : normP(dir + p))
+      const html = rewriteHtml(idx.content, map, resolveRel)
+      const inject = html.replace(/<\/body>/i, (m) => EDIT_PROBE + '\n' + m)
+      setDoc(inject === html ? html + EDIT_PROBE : inject)
+      if (!quiet) setPdStatus(`عرض «${base || 'مساحة العمل'}» — ${files.length} ملف`)
+    } else {
+      if (!quiet) {
+        setDoc(null)
+        setPdStatus('لا يزال الوكيل يكتب index.html…')
+      }
+    }
+    blobsRef.current.forEach((u) => URL.revokeObjectURL(u))
+    blobsRef.current = newBlobs
+  }, [])
+
   const build = useCallback(async () => {
     setPdLoading(true)
-    let newBlobs: string[] = []
     try {
       const { tree: fullTree } = await workspace.tree()
       const prjFolder = useApp.getState().codingProjectFolder
@@ -182,33 +303,14 @@ export function CodingMode() {
         }
       }
       await walk(sub as FileNode[])
-      const norm = (p: string) => p.replace(/^[\/\\]+/, '').split('?')[0]
-      for (const f of files) {
-        newBlobs.push(URL.createObjectURL(new Blob([f.content], { type: mimeFor(f.rel) })))
-        if (/\.(html?)$/.test(f.rel)) docsRef.current.set(f.rel, f.content)
-      }
-      const map = new Map(files.map((f, i) => [norm(f.rel), newBlobs[i]]))
-      const idx = files.find((f) => /^index\.html?$/.test(norm(f.rel))) || files.find((f) => /\/index\.html?$/.test(norm(f.rel)))
-      if (idx) {
-        const dir = idx.rel.replace(/[^/]*$/, '')
-        const resolveRel = (p: string) => (p.startsWith('/') ? norm(p) : norm(dir + p))
-        const html = rewriteHtml(idx.content, map, resolveRel)
-        const inject = html.replace(/<\/body>/i, (m) => EDIT_PROBE + '\n' + m)
-        setDoc(inject === html ? html + EDIT_PROBE : inject)
-        setPdStatus(`عرض «${base || 'مساحة العمل'}» — ${files.length} ملف`)
-      } else {
-        setDoc(null)
-        setPdStatus('لا يزال الوكيل يكتب index.html…')
-      }
+      applyDoc(files, base)
     } catch {
       setDoc(null)
       setPdStatus('لا يزال البناء جاريًا…')
     } finally {
       setPdLoading(false)
-      blobsRef.current.forEach((u) => URL.revokeObjectURL(u))
-      blobsRef.current = newBlobs
     }
-  }, [])
+  }, [applyDoc])
 
   useEffect(() => {
     const id = setTimeout(build, 300)
@@ -218,6 +320,24 @@ export function CodingMode() {
       blobsRef.current = []
     }
   }, [build, variant])
+
+  /** المعاينة الحية: نرسم مباشرة من liveFiles دون انتظار الحفظ على القرص */
+  const liveFiles = useApp((s) => s.liveFiles)
+  useEffect(() => {
+    if (!shot || !Object.keys(liveFiles).length) return
+    const id = setTimeout(() => {
+      const entries = Object.entries(liveFiles).filter(([, c]) => c.length > 0)
+      if (!entries.length) return
+      const baseFiles = liveRef.current?.files?.slice() ?? []
+      for (const [rel, content] of entries) {
+        const i = baseFiles.findIndex((f) => f.rel === rel)
+        if (i >= 0) baseFiles[i] = { rel, content }
+        else baseFiles.push({ rel, content })
+      }
+      applyDoc(baseFiles, liveRef.current?.base ?? null, true)
+    }, 150)
+    return () => clearTimeout(id)
+  }, [liveFiles, applyDoc])
 
   useEffect(() => {
     if (!activeCodeFile) {
@@ -250,6 +370,17 @@ export function CodingMode() {
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
   }, [shot?.actions.length])
+
+  useEffect(() => {
+    if (!shot?.running) {
+      setElapsed(0)
+      startedRef.current = null
+      return
+    }
+    startedRef.current = startedRef.current ?? Date.now()
+    const iv = setInterval(() => setElapsed(Math.floor((Date.now() - (startedRef.current || Date.now())) / 1000)), 1000)
+    return () => clearInterval(iv)
+  }, [shot?.running])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -361,11 +492,13 @@ export function CodingMode() {
 
   if (!shot) return null
 
-  const typing = shot.typed
+  const typing: { file: string | null; text: string } | null = shot.typed
   const typingHere = typing && typing.file === activeCodeFile && !!typing.text
   const elDesc = editTarget
     ? [editTarget.tag, editTarget.id && `#${editTarget.id}`, editTarget.className && `.${editTarget.className}`].filter(Boolean).join('') || '<' + editTarget.tag + '>'
     : ''
+  const stageKey = stageKeyOf(shot.actions)
+  const revealBuild = shot.running && !shot.error && !shot.done && !typing && codeFiles.length === 0 && !editPend && shot.mode !== 'edit'
 
   return (
     <div className="fixed inset-0 z-[100] flex flex-col bg-night-950 text-slate-200">
@@ -437,55 +570,14 @@ export function CodingMode() {
         </div>
       </div>
 
-      {/* الجسد: كود | موقع */}
+      {/* شاشة البناء الفاخرة أثناء انتظار أول ملف */}
+      {revealBuild && <BuildOverlay project={shot.project} stage={stageKey} elapsed={elapsed} actions={shot.actions} file={null} />}
+
+      {/* الجسد: الموقع الحي (يمين) | الكود (يسار) */}
       <div className="grid min-h-0 flex-1 grid-cols-2 gap-0">
-        {/* الكود */}
-        <div className="flex min-h-0 flex-col border-s border-white/5">
-          <div className="flex items-center gap-1 overflow-x-auto border-b border-white/10 bg-night-900/60 px-2 py-1.5">
-            {codeFiles.length === 0 && <span className="px-2 text-[11px] text-slate-500">بانتظار أن يبدأ الوكيل الكتابة…</span>}
-            {codeFiles.map((f) => (
-              <button
-                key={f.path}
-                onClick={() => useApp.getState().setActiveCodeFile(f.path)}
-                className={`shrink-0 rounded-md px-2 py-1 font-mono text-[11px] transition ${
-                  activeCodeFile === f.path ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                }`}
-              >
-                {f.path.split('/').pop()}
-              </button>
-            ))}
-            <button onClick={build} title="تحديث المعاينة" className="ms-auto shrink-0 rounded-md p-1 text-slate-500 hover:bg-white/10 hover:text-white">
-              <RefreshCw size={13} />
-            </button>
-          </div>
-
-          <div className="relative min-h-0 flex-1">
-            {typing && typing.file !== activeCodeFile && typing.file && (
-              <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-2 border-b border-cyan-500/20 bg-cyan-500/10 px-3 py-1.5 text-[11px] text-cyan-300">
-                <Loader2 size={12} className="animate-spin" /> يكتب {typing.file} الآن…{' '}
-                {typing.text.length > 0 && <span className="text-slate-400">({typing.text.length} حرفًا)</span>}
-              </div>
-            )}
-            <div className="h-full">
-              {typingHere ? (
-                <pre className="h-full overflow-auto bg-night-950/60 p-4 font-mono text-[12.5px] leading-relaxed text-emerald-300" dir="ltr">
-                  {typing.text}
-                  <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-emerald-400 align-middle" />
-                </pre>
-              ) : (
-                <Editor
-                  language={extLang(activeCodeFile || '')}
-                  theme="vs-dark"
-                  value={codeFileContent ?? ''}
-                  options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, wordWrap: 'on' }}
-                />
-              )}
-            </div>
-          </div>
-        </div>
-
         {/* الموقع الحي */}
-        <div className="flex min-h-0 flex-col border-s border-white/10">
+        <div className="flex min-h-0 flex-col">
+
           <div className="flex items-center justify-between border-b border-white/10 bg-night-900/60 px-3 py-1.5">
             <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
               {pdLoading && <Loader2 size={12} className="animate-spin" />}
@@ -590,6 +682,51 @@ export function CodingMode() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* الكود */}
+        <div className="flex min-h-0 flex-col border-s border-white/5">
+          <div className="flex items-center gap-1 overflow-x-auto border-b border-white/10 bg-night-900/60 px-2 py-1.5">
+            {codeFiles.length === 0 && <span className="px-2 text-[11px] text-slate-500">بانتظار أن يبدأ الوكيل الكتابة…</span>}
+            {codeFiles.map((f) => (
+              <button
+                key={f.path}
+                onClick={() => useApp.getState().setActiveCodeFile(f.path)}
+                className={`shrink-0 rounded-md px-2 py-1 font-mono text-[11px] transition ${
+                  activeCodeFile === f.path ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                }`}
+              >
+                {f.path.split('/').pop()}
+              </button>
+            ))}
+            <button onClick={build} title="تحديث المعاينة" className="ms-auto shrink-0 rounded-md p-1 text-slate-500 hover:bg-white/10 hover:text-white">
+              <RefreshCw size={13} />
+            </button>
+          </div>
+
+          <div className="relative min-h-0 flex-1">
+            {typing && typing.file !== activeCodeFile && typing.file && (
+              <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-2 border-b border-cyan-500/20 bg-cyan-500/10 px-3 py-1.5 text-[11px] text-cyan-300">
+                <Loader2 size={12} className="animate-spin" /> يكتب {typing.file} الآن…{' '}
+                {typing.text.length > 0 && <span className="text-slate-400">({typing.text.length} حرفًا)</span>}
+              </div>
+            )}
+            <div className="h-full">
+              {typingHere ? (
+                <pre className="h-full overflow-auto bg-night-950/60 p-4 font-mono text-[12.5px] leading-relaxed text-emerald-300" dir="ltr">
+                  {typing.text}
+                  <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-emerald-400 align-middle" />
+                </pre>
+              ) : (
+                <Editor
+                  language={extLang(activeCodeFile || '')}
+                  theme="vs-dark"
+                  value={codeFileContent ?? ''}
+                  options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, wordWrap: 'on' }}
+                />
+              )}
+            </div>
           </div>
         </div>
       </div>

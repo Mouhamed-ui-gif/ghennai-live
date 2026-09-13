@@ -1,7 +1,7 @@
 import path from 'path'
 import fs from 'fs'
 import tools from '../tools/registry.js'
-import { generate } from '../lib/modelRouter.js'
+import { generate, codestreamGen } from '../lib/modelRouter.js'
 import { emitUser } from '../lib/events.js'
 import { audit } from '../lib/auditLog.js'
 import { userWorkspace } from '../lib/paths.js'
@@ -307,23 +307,52 @@ async function* runCoding(user, userMessage, opts = {}) {
   let fixRounds = 0
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     let res
+    let streamedLive = false
     try {
-      res = await generate({ messages, tools: TOOL_SCHEMAS })
+      const liveFiles = new Set()
+      try {
+        for await (const ev of codestreamGen({ messages, tools: TOOL_SCHEMAS, provider: 'auto' })) {
+          if (ev.kind === 'done') {
+            res = ev.result
+            break
+          }
+          if (ev.kind === 'text') {
+            streamedLive = true
+            yield { type: 'stream_chunk', content: ev.text }
+          } else if (ev.kind === 'toolArgs' && ev.delta) {
+            streamedLive = true
+            const file = ev.file || null
+            if (file) {
+              const first = !liveFiles.has(file)
+              if (first) {
+                liveFiles.add(file)
+                yield { type: 'code_token', action: 'open', file }
+              }
+              yield { type: 'code_token', content: ev.delta, file }
+            }
+          }
+        }
+      } catch (streamErr) {
+        let recovered = null
+        for (let attempt = 0; attempt < 2 && !recovered; attempt++) {
+          yield { type: 'agent', agent: 'Coding', message: `انقطاع مؤقت في المزوّد — إعادة المحاولة (${attempt + 1}/2)…`, status: 'retry' }
+          await sleep(1500 * (attempt + 1))
+          try { recovered = await generate({ messages, tools: TOOL_SCHEMAS }) } catch { /* noop */ }
+        }
+        if (recovered) {
+          res = recovered
+        } else {
+          yield { type: 'code_token', action: 'done' }
+          yield { type: 'agent', agent: 'Coding', message: `خطأ في النموذج: ${streamErr.message}`, status: 'error' }
+          yield { type: 'answer', content: `تعذّر تنفيذ المهمة بسبب خطأ النموذج: ${streamErr.message}` }
+          return
+        }
+      }
     } catch (err) {
-      let recovered = null
-      for (let attempt = 0; attempt < 2 && !recovered; attempt++) {
-        yield { type: 'agent', agent: 'Coding', message: `انقطاع مؤقت في المزوّد — إعادة المحاولة (${attempt + 1}/2)…`, status: 'retry' }
-        await sleep(1500 * (attempt + 1))
-        try { recovered = await generate({ messages, tools: TOOL_SCHEMAS }) } catch { /* noop */ }
-      }
-      if (recovered) {
-        res = recovered
-      } else {
-        yield { type: 'code_token', action: 'done' }
-        yield { type: 'agent', agent: 'Coding', message: `خطأ في النموذج: ${err.message}`, status: 'error' }
-        yield { type: 'answer', content: `تعذّر تنفيذ المهمة بسبب خطأ النموذج: ${err.message}` }
-        return
-      }
+      yield { type: 'code_token', action: 'done' }
+      yield { type: 'agent', agent: 'Coding', message: `خطأ داخلي: ${err.message}`, status: 'error' }
+      yield { type: 'answer', content: `تعذّر تنفيذ المهمة بسبب خطأ داخلي: ${err.message}` }
+      return
     }
 
     const toolCalls = res.toolCalls || []
@@ -332,7 +361,7 @@ async function* runCoding(user, userMessage, opts = {}) {
 
       // ── وضع الاقتراح: يخطط فقط، والمستخدم يوافق قبل أي تعديل ──
       if (proposeMode) {
-        if (res.content) yield* yieldTyped(res.content, { rate: 5, chunk: 120 })
+        if (res.content && !streamedLive) yield* yieldTyped(res.content, { rate: 5, chunk: 120 })
         yield { type: 'code_token', action: 'done' }
         yield { type: 'edit_proposal', element: opts.element || null, root: workingRoot, request: userMessage, summary: res.content || '' }
         yield { type: 'coding_done', built: false, content: res.content || '' }
@@ -372,28 +401,39 @@ async function* runCoding(user, userMessage, opts = {}) {
         /* النسخ الاحتياطي اختياري */
       }
 
-      // ── النشر التلقائي: بعد نجاح بناء موقع جديد يُنشر فورًا ورابطه يُعلن هنا ──
-      let publishResult = null
+      // ── النشر التلقائي: يتحرك خلف الرد ولا يعطّله — الرابط يصل عبر أحداث النشر ──
+      let autoPublish = false
       if (!editMode && (built || (attempts > 0 && fs.existsSync(path.join(toolBaseWs, 'index.html'))))) {
-        try {
-          publishResult = await publishSite({ email: user.email, name: user.name, folder: root === '' ? '.' : root, allowCli: true })
-        } catch {
-          publishResult = null
-        }
+        autoPublish = true
+        emitUser(user.email, { type: 'deploy_progress', stage: 'init', message: '🚀 اكتمل البناء — النشر التلقائي جارٍ على رابطك الدائم…' })
+        publishSite({ email: user.email, name: user.name, folder: root === '' ? '.' : root, allowCli: true })
+          .then((r) => {
+            if (r && !r.ok && !r.missingToken) {
+              emitUser(user.email, { type: 'deploy_progress', stage: 'error', message: `النشر: ${r.error || 'فشل غير متوقع'}` })
+            }
+          })
+          .catch(() => {})
       }
       const summary = res.content || ''
-      const withLink = publishResult?.ok && publishResult?.url ? `${summary}\n\n🔗 موقعك على الإنترنت الآن — افتحه من الزر:\n${publishResult.url}` : summary
+      const withLink = `${summary}${autoPublish ? `\n\n🚀 النشر التلقائي جارٍ الآن على رابطك الدائم — سيصلك الرابط فور جاهزيته (شريط «افتح موقعي»).` : ''}`
 
-      if (withLink) yield* yieldTyped(withLink, { rate: 5, chunk: 120 })
+      if (withLink) {
+        if (streamedLive) {
+          const added = withLink.slice(summary.length)
+          if (added.trim()) yield { type: 'stream_chunk', content: added }
+        } else {
+          yield* yieldTyped(withLink, { rate: 5, chunk: 120 })
+        }
+      }
       yield { type: 'code_token', action: 'done' }
-      yield { type: 'coding_done', built: built || attempts > 0, content: withLink, version: nextVersion, url: (publishResult && publishResult.ok && publishResult.url) || null }
-      yield { type: 'answer', content: withLink || (publishResult && !publishResult.ok ? `نُشئ الموقع ✓ ${publishResult.error ? '\n' + publishResult.error : ''}` : 'انتهت المهمة.') }
+      yield { type: 'coding_done', built: built || attempts > 0, content: withLink, version: nextVersion, url: null }
+      yield { type: 'answer', content: withLink || 'انتهت المهمة.' }
       rememberProject(user.email, 'last', { summary: String(summary).slice(0, 400), ts: Date.now() })
       return
     }
 
     messages.push({ role: 'assistant', content: res.content || '', tool_calls: toolCalls })
-    if (res.content) {
+    if (res.content && !streamedLive) {
       yield* yieldTyped(res.content, { rate: 6, chunk: 100 })
       await sleep(100)
     }

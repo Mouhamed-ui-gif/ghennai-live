@@ -13,7 +13,7 @@ const DEFAULTS = {
   interval: 0,
   team: true,
   solo: true,
-  pipeline: true,
+  pipeline: false,
   models: { Core: '', Coding: '', Research: '', Study: '', Design: '', Genie: '', Voice: '' },
 }
 

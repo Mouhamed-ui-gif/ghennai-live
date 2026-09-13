@@ -159,6 +159,7 @@ interface AppState {
   codingVoice: boolean
   codingShot: CodingShot | null
   codeFiles: { path: string }[]
+  liveFiles: Record<string, string>
   activeCodeFile: string | null
   codeFileContent: string | null
   editTarget: EditElement | null
@@ -304,6 +305,7 @@ export const useApp = create<AppState>((set, get) => ({
   codingVoice: true,
   codingShot: null,
   codeFiles: [],
+  liveFiles: {},
   activeCodeFile: null,
   codeFileContent: null,
   editTarget: null,
@@ -363,7 +365,7 @@ export const useApp = create<AppState>((set, get) => ({
     set({
       user: null, token: null, msgs: [], arenaOpen: false, activity: [],
       termLines: [], previewUrl: null, deployState: 'idle', deployUrl: null,
-      codingOpen: false, codingShot: null, codeFiles: [], activeCodeFile: null, codeFileContent: null, editTarget: null, editBusy: false, editPend: null,
+      codingOpen: false, codingShot: null, codeFiles: [], activeCodeFile: null, codeFileContent: null, editTarget: null, editBusy: false, editPend: null, liveFiles: {},
       brainOpen: false, sessionsOpen: false, resumeText: null, resumeTitle: null, brainBoard: {}, brainProgress: 0, brainPhase: 'idle', brainFeed: [], brainPaused: false,
 prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', speechOut: false, paused: false, interval: 0, team: true, models: {} },
     })
@@ -373,7 +375,7 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
     try {
       localStorage.removeItem('ghn_msgs')
     } catch { /* noop */ }
-    set({ msgs: [], activity: [], arenaOpen: false, termOpen: false, termLines: [], previewUrl: null, deployState: 'idle', codingOpen: false, codingShot: null, codeFiles: [], editTarget: null, editBusy: false, editPend: null })
+    set({ msgs: [], activity: [], arenaOpen: false, termOpen: false, termLines: [], previewUrl: null, deployState: 'idle', codingOpen: false, codingShot: null, codeFiles: [], editTarget: null, editBusy: false, editPend: null, liveFiles: {} })
   },
 
   setBrainOpen: (b) => set({ brainOpen: b }),
@@ -538,7 +540,7 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
       },
     })),
 
-  exitCodingMode: () => set({ codingOpen: false }),
+  exitCodingMode: () => set({ codingOpen: false, liveFiles: {} }),
 
   setCodingVoice: (b) => set({ codingVoice: b }),
 
@@ -547,16 +549,30 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
       if (!s.codingShot) return {}
       const shot = s.codingShot
       if (chunk.action === 'open' || chunk.action === 'edit') {
-        return { codingShot: { ...shot, typed: { file: chunk.file || null, text: '' }, error: null } }
+        const liveFiles = { ...s.liveFiles }
+        if (chunk.file) liveFiles[chunk.file] = ''
+        return {
+          codingShot: { ...shot, typed: { file: chunk.file || null, text: '' }, error: null },
+          liveFiles,
+        }
       }
       if (chunk.action === 'done') {
-        return { codingShot: { ...shot, typed: null } }
+        return { codingShot: { ...shot, typed: null }, liveFiles: {} }
+      }
+      if (chunk.action === 'boot') {
+        const liveFiles = { ...s.liveFiles }
+        if (chunk.file) liveFiles[chunk.file] = chunk.content || ''
+        return { codingShot: { ...shot }, liveFiles }
       }
       return {
         codingShot: {
           ...shot,
           typed: { file: chunk.file ?? shot.typed?.file ?? null, text: (shot.typed?.text || '') + (chunk.content || '') },
         },
+        liveFiles:
+          chunk.file && chunk.content
+            ? { ...s.liveFiles, [chunk.file]: (s.liveFiles[chunk.file] || '') + chunk.content }
+            : s.liveFiles,
       }
     }),
 

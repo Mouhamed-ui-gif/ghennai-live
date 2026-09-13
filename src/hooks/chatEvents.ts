@@ -112,6 +112,10 @@ export function handleChatEvent(e: SSEvent): void {
     case 'code_token': {
       const ev = e as unknown as { content?: string; file?: string | null; action?: string }
       useApp.getState().codeToken({ content: ev.content ?? null, file: ev.file ?? null, action: ev.action ?? null })
+      if (ev.file && (ev.action === 'open' || ev.action === 'edit')) {
+        const st = useApp.getState()
+        if (!st.codeFiles.some((f) => f.path === ev.file)) st.upsertCodeFile(ev.file)
+      }
       break
     }
     case 'agent_event': {
