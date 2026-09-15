@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
+import { requireAuth } from './auth.js'
 
 const router = express.Router()
 
@@ -60,7 +61,7 @@ async function elevenTts(text) {
   return Buffer.from(await res.arrayBuffer())
 }
 
-router.post('/tts', express.json(), async (req, res) => {
+router.post('/tts', express.json(), requireAuth, async (req, res) => {
   const text = String(req.body?.text || '').trim().slice(0, 2000)
   const lang = String(req.body?.lang || 'ar').slice(0, 8)
   if (!text) return res.status(400).json({ error: 'text required' })
@@ -79,7 +80,7 @@ router.post('/tts', express.json(), async (req, res) => {
   }
 })
 
-router.post('/stt', express.json({ limit: '10mb' }), async (req, res) => {
+router.post('/stt', express.json({ limit: '10mb' }), requireAuth, async (req, res) => {
   const audioB64 = String(req.body?.audio || '')
   const lang = String(req.body?.lang || 'ar').slice(0, 8)
   if (!audioB64) return res.status(400).json({ error: 'audio required' })

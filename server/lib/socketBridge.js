@@ -1,5 +1,5 @@
 import { Server } from 'socket.io'
-import jwt from 'jsonwebtoken'
+import { verifyToken } from '../routes/auth.js'
 import { setSocketBroadcaster } from './events.js'
 
 let io = null
@@ -15,7 +15,7 @@ export function bindSocket(server) {
   io.use((socket, next) => {
     try {
       const token = socket.handshake.auth?.token
-      const payload = jwt.verify(token || '', process.env.JWT_SECRET || 'dev-secret')
+      const payload = verifyToken(token || '')
       if (!payload || !payload.email) throw new Error('bad token')
       socket.data.email = payload.email
       next()

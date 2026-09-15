@@ -1,17 +1,48 @@
 import express from 'express'
 import jwt from 'jsonwebtoken'
+import { randomUUID } from 'node:crypto'
+import { RevokedToken } from '../lib/db.js'
 
 const router = express.Router()
 
 function secret() {
-  return process.env.JWT_SECRET || 'dev-secret'
+  const s = process.env.JWT_SECRET
+  if (!s || s === 'dev-secret' || s === 'ghennai-super-secret') {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('⚠️  JWT_SECRET غير مُعدّل — التوكنات غير آمنة في الإنتاج!')
+    } else {
+      console.warn('⚠️  JWT_SECRET افتراضي — استخدم قيمة عشوائية في الإنتاج')
+    }
+  }
+  return s || 'dev-secret'
 }
-
-const GOOGLE_VERIFY = 'https://oauth2.googleapis.com/tokeninfo'
 
 export function signToken(user) {
-  return jwt.sign({ email: user.email, name: user.name }, secret())
+  return jwt.sign({ email: user.email, name: user.name, jti: randomUUID() }, secret(), { expiresIn: '7d' })
 }
+
+export function verifyToken(token) {
+  const payload = jwt.verify(token, secret())
+  if (payload.jti && RevokedToken.isRevoked(payload.jti)) {
+    throw new Error('Token revoked')
+  }
+  return payload
+}
+
+export function requireAuth(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1]
+  if (!token) return res.status(401).json({ error: 'Unauthorized' })
+  try {
+    req.user = verifyToken(token)
+    next()
+  } catch {
+    res.status(401).json({ error: 'Invalid token' })
+  }
+}
+
+export { secret }
+
+const GOOGLE_VERIFY = 'https://oauth2.googleapis.com/tokeninfo'
 
 router.post('/google', async (req, res) => {
   const idToken = req.body?.idToken
@@ -47,17 +78,6 @@ router.post('/google', async (req, res) => {
   }
 })
 
-export function requireAuth(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1]
-  if (!token) return res.status(401).json({ error: 'Unauthorized' })
-  try {
-    req.user = jwt.verify(token, secret())
-    next()
-  } catch {
-    res.status(401).json({ error: 'Invalid token' })
-  }
-}
-
 router.post('/register', async (req, res) => {
   const { email, password, name } = req.body
   if (!email || !password) return res.status(400).json({ error: 'Missing fields' })
@@ -82,6 +102,12 @@ router.post('/login', async (req, res) => {
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' })
   const token = signToken(user)
   res.json({ token, user: { email: user.email, name: user.name } })
+})
+
+router.post('/logout', requireAuth, (req, res) => {
+  const jti = req.user?.jti
+  if (jti) RevokedToken.revoke(jti)
+  res.json({ ok: true })
 })
 
 router.get('/me', requireAuth, async (req, res) => {

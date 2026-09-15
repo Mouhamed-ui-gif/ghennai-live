@@ -13,3 +13,8 @@ export function audit(entry) {
 export function getRecent(n = 100) {
   return logs.slice(0, n)
 }
+
+export function getForUser(email, n = 100) {
+  const user = String(email || '').toLowerCase()
+  return logs.filter((l) => String(l.user || '').toLowerCase() === user).slice(0, n)
+}

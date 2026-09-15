@@ -1,17 +1,12 @@
 import express from 'express'
-import jwt from 'jsonwebtoken'
 import rateLimit from 'express-rate-limit'
-import { requireAuth } from './auth.js'
+import { requireAuth, verifyToken } from './auth.js'
 import { handleRequest, status } from '../agents/core.js'
 import { attachSSE, bindRequestStream } from '../lib/events.js'
-import { audit, getRecent } from '../lib/auditLog.js'
+import { audit, getForUser } from '../lib/auditLog.js'
 
 const router = express.Router()
 const chatLimiter = rateLimit({ windowMs: 60000, limit: 30, standardHeaders: true, legacyHeaders: false })
-
-function secret() {
-  return process.env.JWT_SECRET || 'dev-secret'
-}
 
 router.get('/status', async (req, res) => {
   res.json(status())
@@ -21,7 +16,7 @@ router.get('/events', (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1] || req.query.token
   if (!token) return res.status(401).json({ error: 'Unauthorized' })
   try {
-    req.user = jwt.verify(token, secret())
+    req.user = verifyToken(token)
     attachSSE(req, res)
   } catch {
     res.status(401).json({ error: 'Invalid token' })
@@ -34,6 +29,10 @@ router.post('/chat', requireAuth, chatLimiter, async (req, res) => {
   const user = { email: req.user.email, name: req.user.name, history: req.history || [] }
 
   let unbind = () => {}
+  const ac = new AbortController()
+  const hardDeadline = setTimeout(() => ac.abort(), Number(process.env.CHAT_MAX_MS || 480000))
+  res.on('close', () => ac.abort())
+
   const send = (payload) => {
     if (res.writableEnded) return
     try {
@@ -53,8 +52,8 @@ router.post('/chat', requireAuth, chatLimiter, async (req, res) => {
     // كل حدث يُبث للمستخدم (أدوات/طرفية/نشاط) يصل أيضًا لجلسة هذا الطلب
     unbind = bindRequestStream(user.email, send)
 
-    for await (const event of handleRequest(user, message, agent, edit ? { edit } : {})) {
-      if (res.writableEnded) break
+    for await (const event of handleRequest(user, message, agent, { edit: edit ? { ...edit } : null, signal: ac.signal })) {
+      if (res.writableEnded || ac.signal.aborted) break
       send(event)
       if (event.type === 'answer') {
         send({ type: 'done', content: event.content })
@@ -63,6 +62,7 @@ router.post('/chat', requireAuth, chatLimiter, async (req, res) => {
         return
       }
     }
+    clearTimeout(hardDeadline)
     if (!res.writableEnded) res.end()
   } catch (err) {
     audit({ user: user.email, agent: 'core', action: 'chat', result: String(err), status: 'error' })
@@ -71,12 +71,14 @@ router.post('/chat', requireAuth, chatLimiter, async (req, res) => {
       res.end()
     }
   } finally {
+    clearTimeout(hardDeadline)
     unbind()
+    ac.abort()
   }
 })
 
 router.get('/audit', requireAuth, (req, res) => {
-  res.json({ logs: getRecent(100) })
+  res.json({ logs: getForUser(req.user.email, 100) })
 })
 
 export default router

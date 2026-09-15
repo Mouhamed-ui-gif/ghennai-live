@@ -24,7 +24,10 @@ const upload = multer({
         cb(e)
       }
     },
-    filename: (_req, file, cb) => cb(null, file.originalname),
+    filename: (_req, file, cb) => {
+      const safe = path.basename(String(file.originalname || 'file')).replace(/[^\w.\- ]+/g, '_').replace(/^\.+/, '') || `file-${Date.now()}`
+      cb(null, safe)
+    },
   }),
   limits: { fileSize: 25 * 1024 * 1024 },
 })
@@ -58,7 +61,12 @@ router.get('/tree', requireAuth, (req, res) => {
   let relDir = req.query.path ? String(req.query.path) : '.'
   relDir = relDir.replace(/^\.\//, '')
   const targetFolder = relDir === '.' ? '' : relDir
-  walk(ws, targetFolder, 0, tree)
+  try {
+    if (targetFolder) safeResolve(ws, targetFolder)
+    walk(ws, targetFolder, 0, tree)
+  } catch {
+    return res.status(400).json({ error: 'أحد مكوّنات المسار غير صالح' })
+  }
   res.json({ root: ws, tree })
 })
 

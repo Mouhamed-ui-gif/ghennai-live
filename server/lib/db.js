@@ -155,6 +155,11 @@ CREATE TABLE IF NOT EXISTS logs (
   duration INTEGER,
   ts TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+  jti TEXT PRIMARY KEY,
+  revoked_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `)
 
 function toRow(columns) {
@@ -349,4 +354,14 @@ const AgentState = {
   },
 }
 
-export { db, User, Project, Task, Memory, Approval, Asset, Social, Log, AgentState }
+const RevokedToken = {
+  revoke(jti) {
+    db.prepare('INSERT OR IGNORE INTO revoked_tokens (jti) VALUES (?)').run(jti)
+  },
+  isRevoked(jti) {
+    if (!jti) return false
+    return !!db.prepare('SELECT 1 FROM revoked_tokens WHERE jti = ?').get(jti)
+  },
+}
+
+export { db, User, Project, Task, Memory, Approval, Asset, Social, Log, AgentState, RevokedToken }
