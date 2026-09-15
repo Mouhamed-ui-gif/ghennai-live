@@ -103,6 +103,7 @@ const IDENTITY_NOTE = `
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 class PausedError extends Error {}
+class AbortError extends Error { constructor(m) { super(m); this.name = 'AbortError' } }
 
 /** طلب تعديل بلغة طبيعية على موقع قائم */
 const EDIT_ASK_RE = /(عدّل|عدل|غيّر|غير|بدّل|لوّن|صبّغ|غيّر لون|غيّر العنوان|غيّر النص|غيّر الألوان|غيّر الالوان|أضف|اضف|احذف|حذف|أزل|ازل|كبّر الخط|صغّر الخط|غيّر في موقعي|عدّل في موقعي|صلّح موقعي|أصلح موقعي|حدّث موقعي|بدّل في موقعي)/i
@@ -390,7 +391,7 @@ No explanation, no markdown, only JSON.` + IDENTITY,
 }
 
 /** مدير البناء: المعمار → المبرمج → المصمم → المعلّم → الجني */
-async function* runBuildPipeline(user, userMessage) {
+async function* runBuildPipeline(user, userMessage, opts = {}) {
   const goal = String(userMessage || '')
   setProgress(user.email, 10, 'architecture')
   setStatus(user.email, 'Core', 'running', 'المعمار يضع مخطط البناء الهندسي…')
@@ -410,7 +411,7 @@ async function* runBuildPipeline(user, userMessage) {
   setProgress(user.email, 28, 'building')
   setStatus(user.email, 'Coding', 'running', 'أبني وأنفّذ في مساحة العمل…')
   feed(user.email, 'Architect', 'Coder', 'سلّم المخطط للمبرمج — يبدأ التنفيذ…', 'handoff')
-  for await (const ev of runCoding(user, goal)) {
+  for await (const ev of runCoding(user, goal, { signal: opts?.signal || null })) {
     if (ev.type === 'answer') {
       coded = ev.content || ''
       continue
@@ -613,6 +614,8 @@ function maybeDefer(agent, message) {
 /** ═══════════ المنسّق الرئيسي ═══════════ */
 export async function* brainRequest(user, userMessage, requested, mode = {}) {
   const email = user.email
+  const canc = mode?.signal || null
+  const ctlAborted = () => canc?.aborted || false
   const s = stateFor(email)
   s.runId = (s.runId || 0) + 1
   for (const a of Object.keys(s.agents)) { s.agents[a].score = null; s.agents[a].feedback = '' }
@@ -627,6 +630,7 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
 
   try {
     if (prefs.paused) throw new PausedError('⏸️ الوكلاء متوقفون مؤقتًا')
+    if (ctlAborted()) throw new AbortError('aborted')
 
     // ── وضع التعديل: عنصر نُقر عليه في المعاينة أو نصّ تعديل — يُقترح أولاً ثم يُنفّذ بعد موافقة المستخدم ──
     if (mode && mode.edit) {
@@ -637,7 +641,7 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
       feed(email, 'Coding', '—', `${runMode === 'propose' ? '📋 اقتراح تعديل' : '✂️ تعديل'} ${elem?.tag ? `<${elem.tag}>` : ''} — ${userMessage.slice(0, 120)}`, runMode === 'propose' ? 'propose' : 'edit')
       setProgress(email, 25, 'editing')
       let out = ''
-      for await (const ev of runCoding(user, userMessage, { mode: runMode, element: elem, root })) {
+      for await (const ev of runCoding(user, userMessage, { mode: runMode, element: elem, root, signal: canc })) {
         if (ev.type === 'answer') out = ev.content
         yield ev
       }
@@ -727,20 +731,20 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
             setStatus(email, 'Coding', 'running', 'يحضّر مقترح التعديل على موقعك الحالي…')
             feed(email, 'Coding', '—', `📋 اقتراح تعديل على «${editProj.name}» — ${t.goal.slice(0, 120)}`, 'propose')
             let out2 = ''
-            for await (const ev of runCoding(user, t.goal, { mode: 'propose', element: null, root: (editProj.root || '.') })) {
+            for await (const ev of runCoding(user, t.goal, { mode: 'propose', element: null, root: (editProj.root || '.'), signal: canc })) {
               if (ev.type === 'answer') out2 = ev.content
               yield ev
             }
             result = { content: out2 || 'اقتراح التعديل جاهز.' }
             setStatus(email, 'Coding', 'done', 'اقتراح التعديل جاهز — بانتظار موافقتك ✓')
           } else if (prefs.pipeline !== false) {
-            for await (const ev of runBuildPipeline(user, t.goal)) {
+            for await (const ev of runBuildPipeline(user, t.goal, { signal: canc })) {
               if (ev.type === 'answer') result = { content: ev.content }
               yield ev
             }
             if (!result) result = { content: 'انتهت مهمة البناء.' }
           } else {
-            for await (const ev of runCoding(user, t.goal)) {
+            for await (const ev of runCoding(user, t.goal, { signal: canc })) {
               if (ev.type === 'answer') result = { content: ev.content }
               yield ev
             }
@@ -869,6 +873,11 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
     const answer = reviewBlock ? finalOutput + reviewBlock : finalOutput
     yield { type: 'answer', agent: targets[0]?.agent || 'general', content: answer }
   } catch (err) {
+    if (err instanceof AbortError || ctlAborted()) {
+      setStatus(email, 'Core', 'idle', '')
+      stageAllIdle(email)
+      return
+    }
     if (err instanceof PausedError) {
       emitUser(email, { type: 'brain_paused', message: String(err.message) })
       setStatus(email, 'Core', 'paused', String(err.message))

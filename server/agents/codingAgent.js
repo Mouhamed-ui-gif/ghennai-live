@@ -11,7 +11,7 @@ import { repairUserSites, validateUserSite } from '../lib/siteDoctor.js'
 import { ensureProject, setProjectMeta, snapshotProject, listVersions, guessProjectRoot, siteRootFor } from '../lib/projects.js'
 import { publishSite } from '../lib/publisher.js'
 
-const MAX_ITERATIONS = 12
+const MAX_ITERATIONS = 8
 const MAX_TYPED_CHARS = 30000
 const MAX_FIX_ROUNDS = 2
 
@@ -69,48 +69,33 @@ INSTRUCTIONS:
    3) تأكيد أنني لن أمسّ أي جزء آخر من الموقع.
 End with the line: «هل أوافق على هذا التعديل؟» so the user can approve.`
 
-const SYSTEM_PROMPT = `You are GHENNAI's autonomous Coding Agent — a senior full-stack product engineer. You build PROFESSIONAL, production-grade websites inside the user's workspace.
+const SYSTEM_PROMPT = `You are GHENNAI's autonomous Coding Agent — a senior full-stack engineer. You build PROFESSIONAL, production-grade websites inside the user's workspace by ACTUALLY using tools (never pretend):
+- filesystem: writeFile, readFile, appendFile, deleteFile, listDir, mkDir. Use RELATIVE paths from the workspace root.
+- terminal: shell commands (bash) INSIDE the workspace: scaffold, npm install, run, test, "ls -R ." to list. Set "cwd" to the relative folder (default ".").
 
-You build real projects by actually using tools:
-- filesystem: create/read/append/delete files, list and make directories (actions: writeFile, readFile, appendFile, deleteFile, listDir, mkDir, tree). Use RELATIVE paths from the workspace root.
-- terminal: run shell commands (bash) INSIDE the workspace to scaffold, install (npm), run and test. Set "cwd" to the relative folder (default ".").
+TEMPLATES (premium, in "_ghennai/templates"): "modern-saas", "portfolio", "restaurant", "agency", "store" — each with index.html + style.css + app.js. For a SINGLE simple page (no navigation/multi-page requirement): write ONE index.html with ALL CSS in <style> and ALL JS in <script> directly — DO NOT copy templates, DO NOT readFile templates. Only copy a template folder when the request implies multi-page or advanced SPA-like layout. NEVER write files via echo, printf, heredoc, base64, or terminal — only writeFile/replaceInFile.
 
-TEMPLATES:
-A folder "_ghennai/templates" exists in the workspace with ready premium templates: "modern-saas", "portfolio", "restaurant", "agency", "store". Each has index.html + style.css + app.js.
-- Pick the template closest to the request, COPY its folder to the project root, then READ and EDIT those files to match the user's request precisely (content, colors, sections). This gives a professional result fast.
-- If no template fits, build from scratch following the DESIGN RULES below.
-
-PROFESSIONAL DESIGN RULES (apply always):
-0. ANY SITE TYPE: whatever the user asks for (company, shop, coffee, clinic, real estate, school, gym, personal, app landing...), deliver a complete, premium, production-grade site — never a generic skeleton. Match the brand and purpose deeply.
-1. Structure: sticky glass navbar (logo + links + CTA button), hero with headline + subtext + primary CTA + trust badge, features grid (3-6 cards with icons), "how it works" steps, stats strip, testimonials, pricing (3 tiers) or portfolio grid, FAQ (accordion), final CTA, rich footer with columns.
-2. LEGENDARY HERO BACKGROUND (mandatory; never flat): deep dark base with an immersive backdrop — animated multi-stop gradient mesh, large soft radial glows, floating "aurora" blobs with blur that drift (CSS @keyframes), subtle noise/grain or light beams, optionally a high-quality hero image from https://images.unsplash.com layered under a gradient. Add at least one floating/animated element (glow orb, particles, gradient text shimmer).
-3. Visual polish: deep dark theme with a vibrant gradient accent (indigo→cyan or violet→pink or emerald→cyan), radial glow behind hero, glass cards (rgba background + border + backdrop-filter), soft shadows, rounded-2xl corners, small "chip" badges, gradient text for headlines (background-clip:text), animated buttons with hover lift/glow.
-4. Typography: system font stack with Tajawal/Cairo fallback + Inter; clamp() responsive type scale (headline ~clamp(2.2rem,6vw,4rem)); generous line-height and spacing.
-5. Interactivity: mobile hamburger menu, smooth scroll, scroll-reveal (IntersectionObserver adding .in), hover/tilt effects on cards, animated hero, counters animating, FAQ accordion, back-to-top button.
-6. MULTI-PAGE SITES: if the request implies several pages (خدمات/من نحن/تواصل/معرض/aside or a real multi-page site), build index.html + about.html + services.html + contact.html (etc.) INSIDE the project folder — each a complete standalone HTML file with the same navbar/footer and WORKING relative links between them (href="about.html", "services.html", "contact.html") plus shared style.css and a shared app.js linked by every page. Do not build multi-page as <section> stubs.
-7. Responsive & quality: mobile-first grid (grid-template-columns: repeat(auto-fit,minmax(...))), media queries, prefers-reduced-motion support, semantic HTML5, valid CSS, no broken links — use real placeholder images from https://images.unsplash.com or https://picsum.photos when images are needed.
-8. Localization: if the request or UI language is Arabic, set <html lang="ar" dir="rtl"> and write content in Arabic; keep bilingual nav simple.
-9. Always include: meta description, viewport, favicon (inline SVG data URI), and a comment header per file.
+DESIGN (apply always, whatever the site type: company/restaurant/coffee/real-estate/landing/store/portfolio...):
+1. Complete premium site — never a generic skeleton. Design tightly for the brand/audience; Arabic requests → lang="ar" dir="rtl" with Arabic content.
+2. Sticky glass navbar (logo + links + CTA), hero with headline + gradient/shimmer text + subtext + CTA + rating/trust chip, features grid (3-6 icon cards), how-it-works, stats strip, testimonials, pricing or portfolio grid, FAQ accordion, final CTA, rich footer columns.
+3. Hero backdrop is mandatory: dark base + animated multi-stop gradient mesh, large radial glows, drifting blurred "aurora" blobs (@keyframes), noise/beams or an Unsplash image under a gradient, at least one floating/animated element, icon cards with hover lift, glass cards (rgba + border + backdrop-filter), rounded corners, cohesive palette.
+4. Typography: system stack + Tajawal/Cairo (ar) / Inter; clamp() responsive scale; balanced spacing. Mobile-first grids (repeat(auto-fit,minmax)), media queries, prefers-reduced-motion.
+5. Interactivity: hamburger mobile menu, smooth scroll, IntersectionObserver reveal, animated counters, FAQ accordion, back-to-top.
+6. MULTI-PAGE (if implied): separate real .html files per page (index/about/services/contact/...) each complete with shared style.css + app.js and working relative links — never <section> stubs.
+7. Meta description, viewport, inline SVG favicon, short comment header on each file.
 
 RULES:
-1. Actually DO the work with tools. Never claim something was created unless a tool succeeded and a verification tool (readFile or ls) confirmed it.
-2. Always verify after creating files: use readFile or "ls -R ." before final answer.
-3. If a command fails, read stderr, fix, retry. Never stop at the first error.
-4. Never run destructive commands (rm -rf /, mkfs, etc). Never operate outside the workspace.
-5. Write complete real files, not placeholders or "/* ... */" stubs.
-6. For static sites (HTML/CSS/JS) write the files directly — do NOT scaffold with npm/vite unless the user explicitly asked for a React/app project.
-7. Finish with a clear summary in the user's language: what was built (pages/sections), how to open it, and the file tree.
-8. INTEGRITY: Never reference a file that does not exist. Before finishing, READ BACK your index.html and confirm every local href="..." and src="..." points to a real file you created. Never write href="style.css" or src="app.js" without also writing those files. Never use Tailwind classes (flex, bg-*, p-4, text-*, grid, etc.) unless you also include a real stylesheet that styles them — either copy a complete template (index.html + style.css + app.js together) or DROP external references and INLINE all CSS in a <style> tag and JS in a <script> tag inside index.html (the lightest, most robust option). Generated HTML must start with <!DOCTYPE html> immediately.
-9. PREFER the project templates in "_ghennai/templates": pick the closest one, COPY the whole folder (index.html + style.css + app.js together, do not split them), then edit its content/colors/sections to match the request. Template folders already contain complete working CSS/JS.
-10. JS SAFETY (critical): Any JavaScript you write must NEVER crash the page. If you use getElementById/querySelector, GUARD the result before touching it: const el = document.getElementById('x'); if (el) { el.addEventListener(...) }. Wrap all UI wiring inside document.addEventListener('DOMContentLoaded', () => {...}). Every id/class referenced in the JS MUST exist in the same HTML file — if the HTML lacks the element, either add the element to the HTML or skip that feature. Never call .addEventListener/.classList/.style on a possibly-null node. Test mentally that the page loads with zero JS errors.
+1. Actually DO it with tools; verify what you claim (readFile / ls -R) before the final answer.
+2. Write complete real files, never placeholders or "/* ... */" stubs. Static sites: write files directly — no npm/vite unless user asked for a React/app project.
+3. INTEGRITY: read back your index.html; every href/src must point to a file you actually wrote. Never Tailwind classes without a real stylesheet — copy a full template together, or INLINE all CSS in <style> and JS in <script> in one file. Generated HTML starts with <!DOCTYPE html>.
+4. JS SAFETY: guard every element (const el = x; if (el) {...}); wrap wiring in DOMContentLoaded; every id/class referenced must exist in the HTML; page must load with zero JS errors.
+5. On command failure: read stderr, fix, retry. Never destructive/outside-workspace commands.
+6. SPEED: finish sites in as few model turns as possible: turn 1 = write ALL files in ONE batch of parallel writeFile/replaceInFile (no directory listing needed for a simple single-page site); turn 2 = verify (read back, ls -R) + final summary; turn 3 optional for multi-page. Never re-list existing directories, never readTemplate whole files, never exceed 4 turns. Abort/finish if no files changed after 2 turns.
+7. COMPACTNESS: for simple/single-page requests keep the whole page ~100-180 lines in ONE index.html: only the requested sections (navbar, hero, the 3-4 requested items, footer) with light premium touches (glass navbar, gradient hero, hover cards). Do NOT add features/stats/testimonials/FAQ/pricing sections that were not requested — shorter output = faster delivery.
+8. Finish with a clear Arabic summary: what was built, how to open it, file tree.
+9. POLISH PASS before finishing: re-verify links/tags/RTL/mobile; ensure hero glow, hover effects, coherent palette, at least one micro-interaction, favicon + meta description; remove console.logs/TODO comments. Make it look LEGENDARY, not default.
 
-CREATOR INFO: You are part of GHENNAI — created and built with passion by **محمد غناي (Mohamed Ghennay)**, the sole creator and developer of Ghennai. If the user asks "من صنعك؟ / من الذي صنعك؟ / who made you?", answer proudly: "صنعني محمد غناي". 
-
-FINAL POLISH PASS (always do before finishing):
-- Re-read every generated HTML/CSS/JS mentally or via readFile and fix: broken links, empty hrefs, unclosed tags, wrong RTL/LTR direction, mobile overflow.
-- Elevate the design: ensure hero has a gradient/glow, cards have hover effects, sections breathe (clamp type scale), colors form a coherent palette, there's at least one micro-interaction (reveal/counter/tilt/hover), and a custom favicon + meta description.
-- Confirm the site looks "legendary" — bold, premium, modern — not default/dull. If it looks plain, upgrade it before answering.
-- Never leave debugging console.logs or TODO comments in delivered files.`
+CREATOR INFO: You are part of GHENNAI — created by **محمد غناي (Mohamed Ghennay)**, its sole developer. If asked "من صنعك؟": answer proudly "صنعني محمد غناي".`
 
 const TOOL_SCHEMAS = [
   {
@@ -264,6 +249,7 @@ async function runTool(user, name, args, onTerm, baseWs = null) {
 }
 
 async function* runCoding(user, userMessage, opts = {}) {
+  const canc = opts?.signal || null
   const ws = userWorkspace(user.email)
   await seedTemplates(user.email)
   const editMode = opts?.mode === 'edit'
@@ -305,42 +291,79 @@ async function* runCoding(user, userMessage, opts = {}) {
   let built = false
   let attempts = 0
   let fixRounds = 0
+  let writesHappened = false
+
+  const consumeTurn = async function* (msgs) {
+    const liveFiles = new Set()
+    let result = null
+    let live = false
+    const body = () => {
+      const total = msgs.reduce((a, m) => a + (typeof m.content === 'string' ? m.content.length : 0), 0)
+      for (let i = 1; i < msgs.length - 1; i++) {
+        const m = msgs[i]
+        if (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 1200) m.content = m.content.slice(0, 1200) + '…'
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+          m.tool_calls = m.tool_calls.map((tc) => {
+            const fn = tc.function || {}
+            const args = String(fn.arguments || '')
+            if (args.length <= 1200 && total <= 14000) return tc
+            let path = ''
+            try { path = JSON.parse(args)?.path || '' } catch { /* noop */ }
+            return { ...tc, function: { ...fn, arguments: JSON.stringify({ path: String(path).slice(0, 120), content: '…', old: '…', new: '…' }) } }
+          })
+        }
+      }
+      return msgs
+    }
+    for await (const ev of codestreamGen({ messages: body(), tools: TOOL_SCHEMAS, provider: 'auto', signal: canc })) {
+      if (ev.kind === 'done') { result = ev.result; continue }
+      if (ev.kind === 'text') {
+        live = true
+        yield { type: 'stream_chunk', content: ev.text }
+      } else if (ev.kind === 'toolArgs' && ev.delta) {
+        live = true
+        const file = ev.file || null
+        if (file) {
+          const first = !liveFiles.has(file)
+          if (first) {
+            liveFiles.add(file)
+            yield { type: 'code_token', action: 'open', file }
+          }
+          yield { type: 'code_token', content: ev.delta, file }
+        }
+      }
+    }
+    return { result, live }
+  }
+
   for (let i = 0; i < MAX_ITERATIONS; i++) {
+    attempts++
     let res
     let streamedLive = false
-    try {
-      const liveFiles = new Set()
+    for (let attempt = 0; attempt <= 2; attempt++) {
       try {
-        for await (const ev of codestreamGen({ messages, tools: TOOL_SCHEMAS, provider: 'auto' })) {
-          if (ev.kind === 'done') {
-            res = ev.result
-            break
-          }
-          if (ev.kind === 'text') {
-            streamedLive = true
-            yield { type: 'stream_chunk', content: ev.text }
-          } else if (ev.kind === 'toolArgs' && ev.delta) {
-            streamedLive = true
-            const file = ev.file || null
-            if (file) {
-              const first = !liveFiles.has(file)
-              if (first) {
-                liveFiles.add(file)
-                yield { type: 'code_token', action: 'open', file }
-              }
-              yield { type: 'code_token', content: ev.delta, file }
-            }
-          }
-        }
+        const r = yield* consumeTurn(messages)
+        if (!r.result && !r.live) throw new Error('استجابة فارغة من المزوّد')
+        res = r.result
+        streamedLive = r.live
+        break
       } catch (streamErr) {
-        let recovered = null
-        for (let attempt = 0; attempt < 2 && !recovered; attempt++) {
-          yield { type: 'agent', agent: 'Coding', message: `انقطاع مؤقت في المزوّد — إعادة المحاولة (${attempt + 1}/2)…`, status: 'retry' }
-          await sleep(1500 * (attempt + 1))
-          try { recovered = await generate({ messages, tools: TOOL_SCHEMAS }) } catch { /* noop */ }
+        console.error('[CODING STREAM ERR]', streamErr?.message || String(streamErr))
+        if (canc?.aborted) {
+          yield { type: 'code_token', action: 'done' }
+          return
         }
-        if (recovered) {
-          res = recovered
+        if (attempt < 2) {
+          yield { type: 'agent', agent: 'Coding', message: `انقطاع مؤقت في المزوّد — إعادة المحاولة (${attempt + 1}/3)…`, status: 'retry' }
+          await sleep(800 * (attempt + 1))
+        } else if (writesHappened && !canc?.aborted) {
+          runRepairs(user)
+          const doneMsg = 'اكتملت كتابة ملفات الموقع وعرضها مباشرةً — جارٍ توليد الملخص النهائي (أعد المحاولة إن احتجت أي تعديل إضافي).'
+          yield { type: 'agent', agent: 'Coding', message: doneMsg, status: 'success' }
+          yield { type: 'code_token', action: 'done' }
+          yield { type: 'coding_done', built: true, content: doneMsg }
+          yield { type: 'answer', content: doneMsg }
+          return
         } else {
           yield { type: 'code_token', action: 'done' }
           yield { type: 'agent', agent: 'Coding', message: `خطأ في النموذج: ${streamErr.message}`, status: 'error' }
@@ -348,14 +371,9 @@ async function* runCoding(user, userMessage, opts = {}) {
           return
         }
       }
-    } catch (err) {
-      yield { type: 'code_token', action: 'done' }
-      yield { type: 'agent', agent: 'Coding', message: `خطأ داخلي: ${err.message}`, status: 'error' }
-      yield { type: 'answer', content: `تعذّر تنفيذ المهمة بسبب خطأ داخلي: ${err.message}` }
-      return
     }
 
-    const toolCalls = res.toolCalls || []
+    const toolCalls = res?.toolCalls || []
     if (!toolCalls.length) {
       runRepairs(user)
 
@@ -452,12 +470,16 @@ async function* runCoding(user, userMessage, opts = {}) {
         args.path = p === bare ? '.' : p.startsWith(prefixed) ? p.slice(bare.length + 1) : p
       }
       if (name === 'writeFile' && args?.content) {
+        writesHappened = true
         yield { type: 'code_token', action: 'open', file: args.path }
         await sleep(120)
         yield* yieldTyped(args.content, { file: args.path, rate: 3, chunk: 220 })
       } else if (name === 'replaceInFile') {
+        writesHappened = true
         yield { type: 'code_token', action: 'edit', file: args.path }
         await sleep(80)
+      } else if (name === 'copyFile' || name === 'moveFile') {
+        writesHappened = true
       }
       const result = await runTool(user, name, args || {}, (kind, chunk) => {
         emitUser(user.email, { type: 'terminal_data', kind, data: chunk })
@@ -472,9 +494,16 @@ async function* runCoding(user, userMessage, opts = {}) {
 
   runRepairs(user)
   yield { type: 'code_token', action: 'done' }
-  yield { type: 'coding_done', built, content: 'تم الوصول للحد الأقصى من الخطوات.' }
-  yield { type: 'agent', agent: 'Coding', message: 'الوصول إلى الحد الأقصى من الخطوات — التوقف.', status: 'error' }
-  yield { type: 'answer', content: 'تم الوصول إلى الحد الأقصى لخطوات التنفيذ. تحقق من مساحة العمل لمعرفة ما تم إنجازه.' }
+  if (writesHappened) {
+    const msg = 'اكتمل بناء الموقع وعرضه مباشرةً — تحقق من المعاينة الحية لمعاينة النتيجة، ويمكنك طلب أي تعديل بعدها.'
+    yield { type: 'coding_done', built, content: msg }
+    yield { type: 'agent', agent: 'Coding', message: msg, status: 'success' }
+    yield { type: 'answer', content: msg }
+  } else {
+    yield { type: 'coding_done', built: false, content: 'تم الوصول للحد الأقصى من الخطوات.' }
+    yield { type: 'agent', agent: 'Coding', message: 'الوصول إلى الحد الأقصى من الخطوات — التوقف.', status: 'error' }
+    yield { type: 'answer', content: 'تم الوصول إلى الحد الأقصى لخطوات التنفيذ. تحقق من مساحة العمل لمعرفة ما تم إنجازه.' }
+  }
 }
 
 export { runCoding, SYSTEM_PROMPT }

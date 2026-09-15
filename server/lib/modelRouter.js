@@ -4,12 +4,13 @@ const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434'
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:3b'
 const OLLAMA_FALLBACK = process.env.OLLAMA_FALLBACK_MODEL || 'gemma3:4b'
 const CLOUD_TIMEOUT_MS = Number(process.env.CLOUD_TIMEOUT_MS || 40000)
+const DATA_QUIET_MS = Number(process.env.DATA_QUIET_MS || 40000)
 /** مهلة "حقّ البداية" للمزوّد الأول حتى يُرسل أول حرف قبل الانتقال للتالي */
 const CLOUD_HEADSTART_MS = Number(process.env.CLOUD_HEADSTART_MS || 15000)
 /** ترتيب أولوية الجودة: النموذج الأقوى أولًا، والباقي احتياط فوري */
 const PROVIDER_PRIORITY = (process.env.PROVIDER_PRIORITY || 'gemini,groq,openrouter,openai,anthropic').split(',').map((s) => s.trim())
 /** أولوية مزوّدات بثّ أدوات البرمجة (تسريع + live code): groq أسرع ثم openrouter ثم openai */
-const TOOL_STREAM_PRIORITY = (process.env.TOOL_STREAM_PRIORITY || 'groq,openrouter,openai').split(',').map((s) => s.trim())
+const TOOL_STREAM_PRIORITY = (process.env.TOOL_STREAM_PRIORITY || 'groq,groq120,openrouter,openai').split(',').map((s) => s.trim())
 
 /** تعقّب "كلفة الحالة": عندما يعيد أي مزوّد 429 (حدّ الاستخدام/الحصّة)، نجمّده مؤقتًا بدل ضربه بلا فائدة */
 const blocked = new Map()
@@ -24,6 +25,7 @@ const PROVIDERS = {
   gemini: { key: process.env.GEMINI_API_KEY || '', model: process.env.GEMINI_MODEL || 'gemini-2.0-flash', tools: true },
   openai: { key: process.env.OPENAI_API_KEY || '', base: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', tools: true },
   groq: { key: process.env.GROQ_API_KEY || '', base: 'https://api.groq.com/openai/v1', model: process.env.GROQ_MODEL || 'llama-3.1-8b-instant', tools: true },
+  groq120: { key: process.env.GROQ_API_KEY || '', base: 'https://api.groq.com/openai/v1', model: process.env.GROQ_TOOLS_MODEL_120 || 'openai/gpt-oss-120b', tools: true },
   openrouter: { key: process.env.OPENROUTER_API_KEY || '', base: 'https://openrouter.ai/api/v1', model: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct', tools: true },
   anthropic: { key: process.env.ANTHROPIC_API_KEY || '', model: process.env.ANTHROPIC_MODEL || 'claude-3-5-haiku-latest', tools: false },
 }
@@ -95,6 +97,17 @@ function normalizeMessages(options) {
   return messages.filter((m) => m.content !== undefined)
 }
 
+/** ضغط مخططات الأدوات قبل الإرسال: يبقي الأسماء والـrequired ويحذف أوصاف السمات الطويلة (يوفّر رموزًا) */
+function compactSchemas(tools) {
+  if (!Array.isArray(tools)) return tools
+  return tools.map((t) => {
+    const fn = t.function || {}
+    const p = fn.parameters || {}
+    const props = Object.fromEntries(Object.entries(p.properties || {}).map(([k, v]) => [k, { type: v.type || 'string' }]))
+    return { type: 'function', function: { name: fn.name, description: String(fn.description || '').slice(0, 200), parameters: { type: 'object', properties: props, required: p.required || [] } } }
+  })
+}
+
 function openAIPayload(provider, options, messages, stream = false, model) {
   const payload = {
     model: model || provider.model,
@@ -108,7 +121,7 @@ function openAIPayload(provider, options, messages, stream = false, model) {
     temperature: options.temperature ?? 0.7,
     stream,
   }
-  if (options.tools && provider.tools) payload.tools = options.tools
+  if (options.tools && provider.tools) payload.tools = compactSchemas(options.tools)
   return payload
 }
 
@@ -273,7 +286,7 @@ async function raceCloud(options, messages) {
 }
 
 async function generateOllama(options) {
-  const { messages = [], prompt, tools, model, raw = false, keepAlive = '30m', think = true, numCtx = 32768 } = options
+  const { messages = [], prompt, tools, model, raw = false, keepAlive = '30m', think = true, numCtx = 8192 } = options
   const chat = []
   if (options.system) chat.push({ role: 'system', content: options.system })
   for (const m of messages) {
@@ -290,6 +303,7 @@ async function generateOllama(options) {
     think: think === false ? false : true,
     options: { num_ctx: numCtx },
   }
+  if (payload.think && payload.model.includes('qwen2.5')) payload.think = false
   if (tools && tools.length) payload.tools = tools
   if (raw) {
     payload.raw = true
@@ -601,43 +615,63 @@ function trackToolsState() {
 }
 
 /** قراءة خطية (مولّدة) لتدفق JSON: AI يمكن للمتصل أن يثمر بين قراءات */
-async function* readNdjsonLines(url, options, signal) {
+function parseResetMs(v) {
+  if (!v) return 0
+  const m = String(v).trim().match(/^([\d.]+)\s*(ms|s|m)$/)
+  if (!m) return 0
+  const n = parseFloat(m[1])
+  return m[2] === 'ms' ? n : m[2] === 's' ? n * 1000 : n * 60000
+}
+
+async function* readNdjsonLines(url, options, signal, quietMs) {
   const controller = new AbortController()
-  const t = setTimeout(() => controller.abort(), CLOUD_TIMEOUT_MS * 2)
-  const sig = signal || controller.signal
+  const t = setTimeout(() => controller.abort(), quietMs || CLOUD_TIMEOUT_MS * 2)
+  const onExt = () => controller.abort()
+  if (signal) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', onExt, { once: true })
+  }
   let res
   try {
-    res = await fetch(url, { ...options, signal: sig })
+    res = await fetch(url, { ...options, signal: controller.signal })
   } catch (err) {
     clearTimeout(t)
+    signal?.removeEventListener('abort', onExt)
     throw err
   }
   if (!res.ok || !res.body) {
     clearTimeout(t)
+    signal?.removeEventListener('abort', onExt)
     const txt = await res.text().catch(() => '')
-    throw new Error(`stream http ${res.status}: ${txt.slice(0, 160)}`)
+    const err = new Error(`stream http ${res.status}: ${txt.slice(0, 160)}`)
+    if (res.status === 429) err.retryAfterMs = parseResetMs(res.headers.get('x-ratelimit-reset-tokens'))
+    throw err
   }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
-  for (;;) {
-    let chunk
-    try {
-      chunk = await reader.read()
-    } catch {
-      break
+  try {
+    for (;;) {
+      let chunk
+      try {
+        chunk = await reader.read()
+      } catch {
+        break
+      }
+      if (chunk.done) break
+      buf += decoder.decode(chunk.value, { stream: true })
+      let nl = buf.indexOf('\n')
+      while (nl !== -1) {
+        const line = buf.slice(0, nl).trim()
+        buf = buf.slice(nl + 1)
+        if (line) yield line
+        nl = buf.indexOf('\n')
+      }
     }
-    if (chunk.done) break
-    buf += decoder.decode(chunk.value, { stream: true })
-    let nl = buf.indexOf('\n')
-    while (nl !== -1) {
-      const line = buf.slice(0, nl).trim()
-      buf = buf.slice(nl + 1)
-      if (line) yield line
-      nl = buf.indexOf('\n')
-    }
+  } finally {
+    clearTimeout(t)
+    signal?.removeEventListener('abort', onExt)
   }
-  clearTimeout(t)
 }
 
 /**
@@ -663,12 +697,14 @@ export async function* codestreamGen(options = {}) {
 
   const tryChain = wantLocalFirst ? [null, ...(ordered.length ? ordered.map((o) => o) : [])] : [...ordered, null]
   for (const cand of tryChain) {
+    if (options.signal?.aborted) throw new Error('aborted')
     if (cand === null) {
       if (!(await ollamaIsAvailable())) continue
       try {
         yield* streamOllamaToolsGen(options, messages)
         return
       } catch (e) {
+        console.error(`[STREAM CHAIN] ollama FAILED:`, String(e?.message || e).slice(0, 160))
         lastErr = String(e?.message || e)
         continue
       }
@@ -688,8 +724,41 @@ export async function* codestreamGen(options = {}) {
       yield* streamOpenAICompatToolsGen(name, p, options, messages, tracker)
       return
     } catch (e) {
-      lastErr = String(e?.message || e)
-      if (/429|quota|RESOURCE_EXHAUSTED/i.test(lastErr)) markBlocked(name)
+      console.error(`[STREAM CHAIN] ${name} FAILED:`, String(e?.message || e).slice(0, 160))
+      lastErr = e instanceof Error ? e : new Error(String(e))
+      const msg = lastErr.message
+      if (name === ordered[0]?.[0] && /429|rate.limit|insufficient_quota/i.test(msg)) {
+        const backoffs = [10000, 20000, 35000]
+        for (let w = 0; w < backoffs.length && !options.signal?.aborted; w++) {
+          const wait = Math.max(backoffs[w], parseResetMs(lastErr.retryAfterMs) || 0)
+          if (!options.signal?.aborted) await new Promise((r) => setTimeout(r, wait))
+          if (options.signal?.aborted) break
+          try {
+            yield* streamOpenAICompatToolsGen(name, p, options, messages, tracker)
+            return
+          } catch (e2) {
+            lastErr = e2 instanceof Error ? e2 : new Error(String(e2))
+            console.error(`[STREAM CHAIN] ${name} retry${w + 1} FAILED:`, String(e2?.message || e2).slice(0, 160))
+          }
+        }
+      } else if (/429|rate.limit|insufficient_quota/i.test(msg) && /groq/.test(name)) {
+        const wait = parseResetMs(lastErr.retryAfterMs)
+        if (wait > 0 && !options.signal?.aborted) {
+          await new Promise((r) => setTimeout(r, wait))
+          if (!options.signal?.aborted) {
+            try {
+              yield* streamOpenAICompatToolsGen(name, p, options, messages, tracker)
+              return
+            } catch (e2) {
+              lastErr = e2 instanceof Error ? e2 : new Error(String(e2))
+              console.error(`[STREAM CHAIN] ${name} after-wait FAILED:`, String(e2?.message || e2).slice(0, 160))
+            }
+          }
+        }
+      }
+      if (options.signal?.aborted || /^abort/i.test(lastErr.message)) break
+      if (/401|403|invalid/i.test(lastErr.message) || /429|rate.limit/i.test(lastErr.message)) markBlocked(name, name === ordered[0]?.[0] ? 6000 : 30000)
+      if (/413|Request too large|context_length|context length/i.test(lastErr.message)) markBlocked(name, 120000)
     }
   }
 
@@ -709,29 +778,48 @@ async function* streamOpenAICompatToolsGen(name, p, options, messages, tracker) 
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${p.key}` }
   if (name === 'openrouter') headers['HTTP-Referer'] = 'http://localhost:3001'
   const payload = openAIPayload(p, options, messages, true, modelForCall(p, options))
+  const controller = new AbortController()
+  const quiet = setTimeout(() => controller.abort(), DATA_QUIET_MS)
+  const ext = options.signal || null
+  const onExt = () => controller.abort()
+  if (ext) {
+    if (ext.aborted) controller.abort()
+    else ext.addEventListener('abort', onExt, { once: true })
+  }
   let full = ''
   const seen = new Set()
-  for await (const line of readNdjsonLines(`${p.base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(payload) })) {
-    if (!line.startsWith('data:')) continue
-    const data = line.slice(5).trim()
-    if (data === '[DONE]') break
-    let j
-    try { j = JSON.parse(data) } catch { continue }
-    const d = j.choices?.[0]?.delta
-    if (!d) continue
-    if (d.content) {
-      full += d.content
-      yield { kind: 'text', text: d.content }
-    }
-    for (const tc of d.tool_calls || []) {
-      const s = tracker.delta(tc.index, tc.id, tc.function?.name, tc.function?.arguments || '')
-      const { file, delta } = tracker.contentSpan(s)
-      if (delta) {
-        if (!seen.has(file || `${tc.index}`)) seen.add(file || `${tc.index}`)
-        yield { kind: 'toolArgs', index: tc.index, file, delta }
+  let sawLine = false
+  try {
+    for await (const line of readNdjsonLines(`${p.base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(payload) }, controller.signal)) {
+      if (!line.startsWith('data:')) continue
+      sawLine = true
+      quiet.refresh()
+      const data = line.slice(5).trim()
+      if (data === '[DONE]') break
+      let j
+      try { j = JSON.parse(data) } catch { continue }
+      const d = j.choices?.[0]?.delta
+      if (!d) continue
+      if (d.content) {
+        full += d.content
+        yield { kind: 'text', text: d.content }
+        if (controller.signal.aborted) throw new Error('aborted')
+      }
+      for (const tc of d.tool_calls || []) {
+        const s = tracker.delta(tc.index, tc.id, tc.function?.name, tc.function?.arguments || '')
+        const { file, delta } = tracker.contentSpan(s)
+        if (delta) {
+          if (!seen.has(file || `${tc.index}`)) seen.add(file || `${tc.index}`)
+          yield { kind: 'toolArgs', index: tc.index, file, delta }
+          if (controller.signal.aborted) throw new Error('aborted')
+        }
       }
     }
+  } finally {
+    clearTimeout(quiet)
+    ext?.removeEventListener('abort', onExt)
   }
+  if (!sawLine || controller.signal.aborted) throw new Error('aborted')
   const calls = tracker.calls()
   yield { kind: 'done', result: { ok: true, provider: name, model: modelForCall(p, options), content: full, toolCalls: calls.length ? calls : null, streamed: !!full } }
 }
@@ -740,12 +828,13 @@ async function* streamOpenAICompatToolsGen(name, p, options, messages, tracker) 
 async function* streamOllamaToolsGen(options, messages) {
   const model = options.model || OLLAMA_MODEL
   const chat = messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '') }))
-  const payload = { model, messages: chat, stream: true, think: options.think === false ? false : true, keep_alive: '30m', options: { num_ctx: options.numCtx || 32768 } }
+  const payload = { model, messages: chat, stream: true, keep_alive: '30m', options: { num_ctx: options.numCtx || 8192 } }
   if (options.tools?.length) payload.tools = options.tools
   let full = ''
   let toolCalls = null
   let saw = false
-  for await (const line of readNdjsonLines(`${OLLAMA_URL}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })) {
+  for await (const line of readNdjsonLines(`${OLLAMA_URL}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, options.signal || null, 25000)) {
+    if (options.signal?.aborted) throw new Error('aborted')
     let j
     try { j = JSON.parse(line) } catch { continue }
     if (j.message?.content) { saw = true; full += j.message.content; yield { kind: 'text', text: j.message.content } }
