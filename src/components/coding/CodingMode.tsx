@@ -126,9 +126,11 @@ export function CodingMode() {
   const [picking, setPicking] = useState(false)
   const [editText, setEditText] = useState('')
   const [publishing, setPublishing] = useState(false)
+  const [publishingGh, setPublishingGh] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const blobsRef = useRef<string[]>([])
   const logRef = useRef<HTMLDivElement | null>(null)
+  const typingScrollRef = useRef<HTMLPreElement | null>(null)
   const docsRef = useRef<Map<string, string>>(new Map())
   const liveRef = useRef<{ files: { rel: string; content: string }[]; base: string | null }>({ files: [], base: null })
 
@@ -275,6 +277,12 @@ export function CodingMode() {
   }, [])
 
   useEffect(() => {
+    if (typingScrollRef.current && shot?.typed?.file && shot?.typed?.text) {
+      typingScrollRef.current.scrollTop = typingScrollRef.current.scrollHeight
+    }
+  }, [shot?.typed?.text, shot?.typed?.file])
+
+  useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
   }, [shot?.actions.length])
 
@@ -357,20 +365,53 @@ export function CodingMode() {
         break
       }
     }
-    if (st.codingVoice) speakText('أُنشِرُ الموقعَ الآن على رابطٍ دائم', document.documentElement.lang === 'ar' ? 'ar' : 'en', undefined, voiceFor('Coding'))
-    st.pushCodeAction({ kind: 'info', text: '🚀 جارٍ النشر على رابط دائم…' })
-    st.pushToast({ kind: 'info', title: 'نشر', message: 'جارٍ النشر… سيصلك الرابط الحي خلال دقيقة' })
+    if (st.codingVoice) speakText('أُنشِرُ الموقعَ الآن على رابط فوري', document.documentElement.lang === 'ar' ? 'ar' : 'en', undefined, voiceFor('Coding'))
+    st.pushCodeAction({ kind: 'info', text: '🚀 تجهيز الرابط الفوري…' })
+    st.pushToast({ kind: 'info', title: 'رابط فوري', message: 'يُحضّر رابط موقعك…' })
     try {
-      const d = await deploy.run(site)
+      const d = await deploy.run(site, 'instant')
       const url = (d as { url?: string }).url
-      st.pushCodeAction({ kind: 'ok', text: `نُشر الموقع على رابط دائم: ${url}` })
-      st.pushToast({ kind: 'success', title: 'تم النشر!', message: url || '' })
-      if (st.codingVoice) speakText('تمّ النشر — رابطُك الدائمُ جاهز', document.documentElement.lang === 'ar' ? 'ar' : 'en', undefined, voiceFor('Coding'))
+      st.pushCodeAction({ kind: 'ok', text: `رابطك الفوري جاهز: ${url}` })
+      st.pushToast({ kind: 'success', title: 'الرابط جاهز!', message: url || '' })
+      st.setDeployState('done', url, null)
+      if (st.codingVoice) speakText('تمّ — رابطُك الفوريُّ جاهز', document.documentElement.lang === 'ar' ? 'ar' : 'en', undefined, voiceFor('Coding'))
     } catch (err) {
-      st.pushCodeAction({ kind: 'err', text: `فشل النشر: ${String((err as Error).message).slice(0, 120)}` })
-      st.pushToast({ kind: 'error', title: 'فشل النشر', message: String((err as Error).message).slice(0, 140) })
+      st.pushCodeAction({ kind: 'err', text: `فشل إنشاء الرابط: ${String((err as Error).message).slice(0, 120)}` })
+      st.pushToast({ kind: 'error', title: 'فشل', message: String((err as Error).message).slice(0, 140) })
     } finally {
       setPublishing(false)
+    }
+  }
+
+  const publishGitHub = async () => {
+    if (publishingGh) return
+    setPublishingGh(true)
+    const st = useApp.getState()
+    let site = '.'
+    for (const f of st.codeFiles) {
+      if (f.path === 'index.html' || f.path.endsWith('/index.html')) {
+        site = dirOf(f.path)
+        break
+      }
+    }
+    st.pushCodeAction({ kind: 'info', text: '🚀 جارٍ النشر الدائم على GitHub… (يتطلب التوكن)' })
+    st.pushToast({ kind: 'info', title: 'نشر دائم', message: 'يُنشر على GitHub Pages… قد يستغرق دقيقة' })
+    try {
+      const d = await deploy.run(site, 'github')
+      const url = (d as { url?: string }).url
+      if (url) {
+        st.setDeployState('done', url, null)
+        st.pushCodeAction({ kind: 'ok', text: `نُشر على رابط دائم: ${url}` })
+        st.pushToast({ kind: 'success', title: 'تم النشر الدائم!', message: url })
+      } else {
+        const err = (d as { error?: string }).error
+        st.pushCodeAction({ kind: 'err', text: `النشر الدائم: ${(err || 'راجع إعدادات GitHub').slice(0, 120)}` })
+        st.pushToast({ kind: 'error', title: 'لم يُنشر', message: (err || 'أضف توكن GitHub لاستخدام الرابط الدائم').slice(0, 140) })
+      }
+    } catch (err) {
+      st.pushToast({ kind: 'error', title: 'فشل النشر الدائم', message: String((err as Error).message).slice(0, 140) })
+    } finally {
+      setPublishingGh(false)
     }
   }
 
@@ -436,10 +477,18 @@ export function CodingMode() {
           </button>
           <button
             onClick={publish}
-            disabled={publishing}
+            disabled={publishing || shot.running}
             className="flex items-center gap-1.5 rounded-lg bg-emerald-500/90 px-2.5 py-1.5 text-[12px] font-semibold text-night-950 transition hover:bg-emerald-400 disabled:opacity-50"
           >
-            {publishing ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />} نشر الرابط الدائم
+            {publishing ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />} رابط فوري
+          </button>
+          <button
+            onClick={publishGitHub}
+            disabled={publishingGh || shot.running}
+            title="نشر دائم على GitHub Pages (يتطلب توكن GitHub)"
+            className="flex items-center gap-1.5 rounded-lg bg-white/5 px-2.5 py-1.5 text-[12px] text-slate-300 transition hover:bg-white/10 disabled:opacity-50"
+          >
+            {publishingGh ? <Loader2 size={14} className="animate-spin" /> : <ExternalLink size={14} />} دائم GitHub
           </button>
           {activeProject && (activeProject.version || 0) > 0 && (
             <span className="flex items-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-[11px] text-slate-300">
@@ -471,10 +520,30 @@ export function CodingMode() {
 
           <div className="flex items-center justify-between border-b border-white/10 bg-night-900/60 px-3 py-1.5">
             <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
-              {pdLoading && <Loader2 size={12} className="animate-spin" />}
-              {pdStatus}
+              {shot.mode === 'build' && shot.live?.url ? (
+                <>
+                  <ExternalLink size={12} className="text-emerald-400" />
+                  <span dir="ltr" className="font-mono text-emerald-300">/{shot.live.code}/ — الموقع الحي</span>
+                </>
+              ) : (
+                <>
+                  {pdLoading && <Loader2 size={12} className="animate-spin" />}
+                  {pdStatus}
+                </>
+              )}
             </span>
             <div className="flex items-center gap-1">
+              {shot.mode === 'build' && shot.live?.url && (
+                <a
+                  href={`${shot.live.url}?v=${variant}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-md p-1 text-slate-400 transition hover:bg-white/10 hover:text-white"
+                  title="فتح الرابط في تبويب جديد"
+                >
+                  <ExternalLink size={13} />
+                </a>
+              )}
               {(['desktop', 'tablet', 'mobile'] as const).map((d) => (
                 <button
                   key={d}
@@ -500,13 +569,24 @@ export function CodingMode() {
               </div>
             )}
             <div className="h-full w-full overflow-hidden rounded-lg shadow-2xl" style={{ maxWidth: previewDevice === 'desktop' ? '100%' : previewDevice === 'tablet' ? '768px' : '390px', margin: 'auto' }}>
-              <iframe
-                ref={iframeRef}
-                title="coding-live-site"
-                srcDoc={doc || '<html><body></body></html>'}
-                className="h-full w-full border-0"
-                sandbox="allow-scripts allow-same-origin allow-forms"
-              />
+              {shot.mode === 'build' && shot.live?.url ? (
+                <iframe
+                  ref={iframeRef}
+                  key={shot.live.code}
+                  title="coding-live-site"
+                  src={`${shot.live.url}?v=${variant}${picking ? '&pick=1' : ''}`}
+                  className="h-full w-full border-0"
+                  sandbox="allow-scripts allow-same-origin allow-forms"
+                />
+              ) : (
+                <iframe
+                  ref={iframeRef}
+                  title="coding-live-site"
+                  srcDoc={doc || '<html><body></body></html>'}
+                  className="h-full w-full border-0"
+                  sandbox="allow-scripts allow-same-origin allow-forms"
+                />
+              )}
             </div>
 
             {editPend && !editBusy && (
@@ -604,8 +684,16 @@ export function CodingMode() {
               </div>
             )}
             <div className="h-full">
-              {typingHere ? (
-                <pre className="h-full overflow-auto bg-night-950/60 p-4 font-mono text-[12.5px] leading-relaxed text-emerald-300" dir="ltr">
+              {!activeCodeFile && !typingHere ? (
+                <div className="flex h-full items-center justify-center text-[12px] text-slate-600 select-none">
+                  {shot.running ? 'جارٍ بناء الموقع… ستظهر الملفات هنا مباشرة' : 'بانتظار أن يبدأ الوكيل الكتابة…'}
+                </div>
+              ) : typingHere ? (
+                <pre
+                  ref={typingScrollRef}
+                  className="h-full overflow-auto bg-night-950/60 p-4 font-mono text-[12.5px] leading-relaxed text-emerald-300"
+                  dir="ltr"
+                >
                   {typing.text}
                   <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-emerald-400 align-middle" />
                 </pre>

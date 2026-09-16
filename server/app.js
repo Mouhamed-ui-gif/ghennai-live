@@ -11,6 +11,7 @@ import chatRoutes from './routes/chat.js'
 import workspaceRoutes from './routes/workspace.js'
 import visionRoutes from './routes/vision.js'
 import deployRoutes from './routes/deploy.js'
+import liveRoutes from './routes/live.js'
 import brainRoutes from './routes/brain.js'
 import projectRoutes from './routes/projects.js'
 import voiceRoutes, { ttsAvailable, isSttAvailable } from './routes/voice.js'
@@ -43,6 +44,9 @@ app.use('/api/vision', visionRoutes)
 app.use('/api/voice', voiceRoutes)
 app.use('/api/deploy', deployRoutes)
 app.use('/api/projects', projectRoutes)
+
+// روابط المواقع الفورية /live/<code>/ — قبل منتصف SPA حتى لا تعترضها صفحة التطبيق
+app.use('/live', liveRoutes)
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const distDir = join(__dirname, '..', 'dist')

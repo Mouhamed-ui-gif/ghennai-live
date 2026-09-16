@@ -157,8 +157,9 @@ export const brain = {
 }
 
 export const deploy = {
-  run: (project: string, provider = 'github') =>
+  run: (project: string, provider: 'instant' | 'github' = 'instant') =>
     http('/api/deploy', { method: 'POST', body: JSON.stringify({ project, provider }) }),
+  github: (project: string) => http('/api/deploy', { method: 'POST', body: JSON.stringify({ project, provider: 'github' }) }),
   status: () => http('/api/deploy/status'),
   saveToken: (token: string) =>
     http('/api/deploy/token', { method: 'POST', body: JSON.stringify({ token }) }),

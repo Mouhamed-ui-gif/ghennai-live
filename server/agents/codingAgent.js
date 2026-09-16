@@ -9,7 +9,7 @@ import { contextBlock, rememberProject } from '../lib/memory.js'
 import { seedTemplates } from '../lib/templateKit.js'
 import { repairUserSites, validateUserSite } from '../lib/siteDoctor.js'
 import { ensureProject, setProjectMeta, snapshotProject, listVersions, guessProjectRoot, siteRootFor } from '../lib/projects.js'
-import { publishSite } from '../lib/publisher.js'
+import { ensureShare } from '../lib/share.js'
 
 const MAX_ITERATIONS = 8
 const MAX_TYPED_CHARS = 30000
@@ -270,9 +270,9 @@ async function* runCoding(user, userMessage, opts = {}) {
     const projectName = detectProjectName(userMessage)
     const projectRoot = siteRootFor(user.email, projectName)
     workingRoot = projectRoot
-    yield { type: 'coding_start', project: projectName, request: userMessage, mode: 'build', root: projectRoot }
-    const registered = ensureProject(user.email, projectRoot, projectName)
-    emitProjectState(user.email, registered)
+    const share = ensureShare(user.email, projectRoot, projectName)
+    emitProjectState(user.email, share.project)
+    yield { type: 'coding_start', project: projectName, request: userMessage, mode: 'build', root: projectRoot, live: { code: share.code, url: share.url } }
     messages.push(
       { role: 'system', content: SYSTEM_PROMPT + memory },
       {
@@ -406,12 +406,13 @@ async function* runCoding(user, userMessage, opts = {}) {
         }
       }
 
-      // ── تسجيل المشروع + لقطة نسخة (Undo/Rollback) ──
+      // ── تسجيل المشروع + لقطة نسخة (Undo/Rollback) + الرابط الفوري ──
       const project = ensureProject(user.email, root, detectProjectName(userMessage))
       const nextVersion = (project.version || 0) + 1
+      const share = ensureShare(user.email, root, project.name)
       try {
         snapshotProject(user.email, root, nextVersion)
-        const meta = { version: nextVersion, lastBuild: Date.now(), built: built || attempts > 0, updatedAt: Date.now() }
+        const meta = { version: nextVersion, lastBuild: Date.now(), built: built || attempts > 0, url: share.url, code: share.code, updatedAt: Date.now() }
         if (editMode) meta.status = 'idle'
         const saved = setProjectMeta(user.email, project.id, meta)
         emitProjectState(user.email, saved)
@@ -419,21 +420,15 @@ async function* runCoding(user, userMessage, opts = {}) {
         /* النسخ الاحتياطي اختياري */
       }
 
-      // ── النشر التلقائي: يتحرك خلف الرد ولا يعطّله — الرابط يصل عبر أحداث النشر ──
+      // ── الرابط الفوري: يتحرك خلف الرد ولا يعطّله — الرابط جاهز فورًا من خادمنا ──
       let autoPublish = false
       if (!editMode && (built || (attempts > 0 && fs.existsSync(path.join(toolBaseWs, 'index.html'))))) {
         autoPublish = true
-        emitUser(user.email, { type: 'deploy_progress', stage: 'init', message: '🚀 اكتمل البناء — النشر التلقائي جارٍ على رابطك الدائم…' })
-        publishSite({ email: user.email, name: user.name, folder: root === '' ? '.' : root, allowCli: true })
-          .then((r) => {
-            if (r && !r.ok && !r.missingToken) {
-              emitUser(user.email, { type: 'deploy_progress', stage: 'error', message: `النشر: ${r.error || 'فشل غير متوقع'}` })
-            }
-          })
-          .catch(() => {})
+        emitUser(user.email, { type: 'deploy_progress', stage: 'init', message: '🚀 اكتمل البناء — موقعك على رابط فوري جاهز للمشاركة…' })
+        emitUser(user.email, { type: 'live_link', url: share.url })
       }
       const summary = res.content || ''
-      const withLink = `${summary}${autoPublish ? `\n\n🚀 النشر التلقائي جارٍ الآن على رابطك الدائم — سيصلك الرابط فور جاهزيته (شريط «افتح موقعي»).` : ''}`
+      const withLink = `${summary}${autoPublish ? `\n\n🚀 اكتمل البناء! موقعك أصبح على **رابط فوري** — افتحه من شريط «افتح موقعي» أعلاه أو شاركه مع من تحب.` : ''}`
 
       if (withLink) {
         if (streamedLive) {
@@ -473,7 +468,7 @@ async function* runCoding(user, userMessage, opts = {}) {
         writesHappened = true
         yield { type: 'code_token', action: 'open', file: args.path }
         await sleep(120)
-        yield* yieldTyped(args.content, { file: args.path, rate: 3, chunk: 220 })
+        yield* yieldTyped(args.content, { file: args.path, rate: 1, chunk: 400 })
       } else if (name === 'replaceInFile') {
         writesHappened = true
         yield { type: 'code_token', action: 'edit', file: args.path }

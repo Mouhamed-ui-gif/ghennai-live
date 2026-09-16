@@ -79,6 +79,7 @@ export interface CodingShot {
   error: string | null
   built: boolean
   typed: { file: string | null; text: string } | null
+  live: { code: string; url: string } | null
   actions: CodeAction[]
 }
 export interface BrainAgentState {
@@ -236,6 +237,7 @@ interface AppState {
   openArena: (project: string) => void
   closeArena: () => void
   setCodingProjectFolder: (root: string | null) => void
+  setCodingLive: (live: CodingShot['live']) => void
   setBuilt: (b: boolean) => void
   setTermOpen: (b: boolean) => void
   setFiles: (f: FileNode[]) => void
@@ -536,9 +538,12 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
         error: null,
         built: false,
         typed: null,
+        live: s.codingShot?.live || null,
         actions: s.codingShot?.actions?.slice(-60) || [],
       },
     })),
+
+  setCodingLive: (live) => set((s) => (s.codingShot ? { codingShot: { ...s.codingShot, live } } : {})),
 
   exitCodingMode: () => set({ codingOpen: false, liveFiles: {} }),
 
@@ -554,6 +559,7 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
         return {
           codingShot: { ...shot, typed: { file: chunk.file || null, text: '' }, error: null },
           liveFiles,
+          activeCodeFile: chunk.file || s.activeCodeFile,
         }
       }
       if (chunk.action === 'done') {

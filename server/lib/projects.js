@@ -132,6 +132,21 @@ export function getProject(email, id) {
   return { ...p }
 }
 
+/** بحث عام عبر كل المستخدمين عن مشروع يحمل كود نشر (لرابط /live المستقل عن المصادقة) */
+export function findByShareCode(code) {
+  const all = load()
+  for (const [email, map] of Object.entries(all)) {
+    for (const p of Object.values(map)) {
+      if (p.code === code) return { email, root: p.root ?? '', project: { ...p } }
+    }
+  }
+  return null
+}
+
+export function shareCodeInUse(code) {
+  return !!findByShareCode(code)
+}
+
 export function touchProject(email, id) {
   const map = projectsFor(email)
   if (!map[id]) return null

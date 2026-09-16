@@ -15,15 +15,22 @@ export async function refreshTree(): Promise<void> {
 
 const uiLang = () => (document.documentElement.lang === 'ar' ? 'ar' : 'en')
 
+/** تحويل الروابط النسبية (/live/code/) إلى مطلقة من أصل التطبيق الحالي */
+const abs = (u?: string | null) => {
+  if (!u) return null
+  return u.startsWith('/') ? `${window.location.origin}${u}` : u
+}
+
 /** المعالج المشترك لكل أحداث الدفق — يستخدمه لوحة الدردشة ووضع البرمجة معًا */
 export function handleChatEvent(e: SSEvent): void {
   switch (e.type) {
     case 'coding_start': {
-      const ev = e as unknown as { project?: string; request?: string; mode?: string; element?: unknown; root?: string | null }
+      const ev = e as unknown as { project?: string; request?: string; mode?: string; element?: unknown; root?: string | null; live?: { code: string; url: string } }
       const st = useApp.getState()
       const editing = ev.mode === 'edit' || ev.mode === 'propose'
       st.setEditPend(null)
       st.enterCodingMode(ev.project || 'الموقع الجديد', editing ? 'edit' : 'build', ev.request || '')
+      if (ev.mode === 'build' && ev.live) st.setCodingLive(ev.live)
       st.setCodingProjectFolder(ev.root || null)
       st.pushCodeAction({ kind: 'notice', text: editing ? `✂️ ${ev.request?.slice(0, 140) || 'تعديل عنصر'}` : `⏺ بدء بناء «${ev.project}»` })
       if (editing && ev.element) st.setEditTarget(ev.element as { tag: string; id: string; className: string; text: string; href?: string | null; src?: string | null })
@@ -38,6 +45,7 @@ export function handleChatEvent(e: SSEvent): void {
       if (ev.project) {
         st.upsertProject(ev.project)
         if (!st.activeProject && st.codingOpen) st.setActiveProject(ev.project)
+        if (!st.deployUrl && ev.project.url) st.setDeployState('done', abs(ev.project.url), null)
       }
       break
     }
@@ -84,16 +92,25 @@ export function handleChatEvent(e: SSEvent): void {
     case 'deploy_verified': {
       const ev = e as unknown as { url?: string }
       const st = useApp.getState()
-      st.setDeployState('done', ev.url ?? null, null)
-      if (ev.url && st.codingOpen) st.pushCodeAction({ kind: 'ok', text: `الرابط حي ✓ ${ev.url}` })
+      st.setDeployState('done', abs(ev.url), null)
+      if (ev.url && st.codingOpen) st.pushCodeAction({ kind: 'ok', text: `الرابط حي ✓ ${abs(ev.url)}` })
+      break
+    }
+    case 'live_link': {
+      const ev = e as unknown as { url?: string }
+      const st = useApp.getState()
+      st.setDeployState('done', abs(ev.url), null)
+      if (ev.url && st.codingOpen) st.pushCodeAction({ kind: 'ok', text: `رابطك الفوري جاهز: ${abs(ev.url)}` })
+      if (ev.url) st.pushToast({ kind: 'success', title: 'موقعك أصبح حيًا! 🚀', message: abs(ev.url) || '' })
+      void st.refreshProjects()
       break
     }
     case 'deploy_done': {
       const ev = e as unknown as { url?: string; repoUrl?: string }
       const st = useApp.getState()
-      st.setDeployState('done', ev.url ?? null, null)
-      st.pushCodeAction({ kind: 'ok', text: `نُشر الموقع على رابطك: ${ev.url}` })
-      st.pushToast({ kind: 'success', title: 'موقعك أصبح حيًا! 🚀', message: ev.url || '' })
+      st.setDeployState('done', abs(ev.url), null)
+      st.pushCodeAction({ kind: 'ok', text: `نُشر الموقع على رابطك: ${abs(ev.url)}` })
+      st.pushToast({ kind: 'success', title: 'موقعك أصبح حيًا! 🚀', message: abs(ev.url) || '' })
       if (st.codingVoice && st.codingOpen) {
         speakText('تمّ النشرُ بنجاح — موقعُك الآن على رابطٍ دائم يمكنكَ فتحُه من الزرّ', uiLang(), undefined, voiceFor('Coding'))
       }
