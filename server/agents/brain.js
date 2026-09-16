@@ -411,7 +411,8 @@ async function* runBuildPipeline(user, userMessage, opts = {}) {
   setProgress(user.email, 28, 'building')
   setStatus(user.email, 'Coding', 'running', 'أبني وأنفّذ في مساحة العمل…')
   feed(user.email, 'Architect', 'Coder', 'سلّم المخطط للمبرمج — يبدأ التنفيذ…', 'handoff')
-  for await (const ev of runCoding(user, goal, { signal: opts?.signal || null })) {
+  const design = plan && (Array.isArray(plan.steps) || Array.isArray(plan.palette)) ? { steps: plan.steps || [], palette: plan.palette || [], stack: plan.stack || 'html/css/js' } : null
+  for await (const ev of runCoding(user, goal, { signal: opts?.signal || null, design })) {
     if (ev.type === 'answer') {
       coded = ev.content || ''
       continue

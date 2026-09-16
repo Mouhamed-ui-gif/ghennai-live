@@ -11,7 +11,7 @@ import { repairUserSites, validateUserSite } from '../lib/siteDoctor.js'
 import { ensureProject, setProjectMeta, snapshotProject, listVersions, guessProjectRoot, siteRootFor } from '../lib/projects.js'
 import { ensureShare } from '../lib/share.js'
 
-const MAX_ITERATIONS = 8
+const MAX_ITERATIONS = 10
 const MAX_TYPED_CHARS = 30000
 const MAX_FIX_ROUNDS = 2
 
@@ -35,6 +35,37 @@ async function* yieldTyped(text, opts = {}) {
     yield { type: 'code_token', content: s.slice(i, i + chunk), file: opts.file || null }
     await sleep(rate)
   }
+}
+
+/** فحص جودة التصميم (مظاهر "الشكل العام/العادية") — يُرجع قائمة تحسينات ملموسة */
+function designQualityCheck(email, root) {
+  const ws = userWorkspace(email)
+  const base = String(root || '.').replace(/\/+$/, '')
+  const dir = base && base !== '.' ? path.resolve(ws, base) : ws
+  const idxFile = ['index.html', 'index.htm'].find((n) => fs.existsSync(path.join(dir, n)))
+  const cssFile = ['style.css', 'main.css', 'styles.css', 'app.css'].find((n) => fs.existsSync(path.join(dir, n)))
+  if (!idxFile) return []
+
+  const flags = []
+  let html = ''
+  let css = ''
+  try { html = fs.readFileSync(path.join(dir, idxFile), 'utf8') } catch { /* noop */ }
+  if (cssFile) {
+    try { css = fs.readFileSync(path.join(dir, cssFile), 'utf8') } catch { /* noop */ }
+  } else {
+    const inline = (html.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || []).map((m) => m.replace(/<\/?style[^>]*>/gi, '')).join('\n')
+    if (inline) css = inline
+  }
+
+  if (html.length < 2800) flags.push({ label: 'الصفحة مختصرة جدًا — تُشعر بأنها هيكل جاهز؛ أضف محتوى حقيقيًا مفصلًا وسطورًا بارزة', code: 'thin' })
+  if (css.length < 900) flags.push({ label: 'الأنماط ضعيفة — عمّق بالمساحات والتدرجات والظلال', code: 'weak-css' })
+  if (!/(@keyframes|animation\s*:|transition\s*:|hover\b)/i.test(css)) flags.push({ label: 'لا وجود لأي حركة — أضف ظهورًا متدرجًا (reveal) و hover وأنيميشن ناعم', code: 'motion' })
+  if (!/(linear-gradient|radial-gradient|conic-gradient)/i.test(css)) flags.push({ label: 'لا تدرجات — أضف توهجات خلفية وشعارًا متدرجًا وأعمدة ملونة', code: 'gradient' })
+  if (!/backdrop-filter/.test(css)) flags.push({ label: 'لا بطاقات زجاجية — أضف glass cards بشفافية وضبابية خلفية', code: 'glass' })
+  if (!/@media\s/i.test(css)) flags.push({ label: 'لا توجد استعلامات وسائط — تأكد من استجابة الموبايل', code: 'media' })
+  if (!/(Cairo|Tajawal|Inter|IBM Plex Sans Arabic|Rubik|Almarai|space-grotesk|Poppins|Outfit)/i.test(html + css)) flags.push({ label: 'خطوط النظام فقط — اعتمد خطوطًا عربية احترافية من Google Fonts', code: 'font' })
+  if (!/(favicon|rel="icon"|\.svg)/i.test(html)) flags.push({ label: 'لا أيقونة — أضف SVG favicon عبر data URI', code: 'favicon' })
+  return flags
 }
 
 const EDIT_SYSTEM_PROMPT = (element, userMessage) => `You are GHENNAI's Coding Agent in EDIT MODE — a precise surgeon for the user's live website. The user clicked an element in their preview and asked for a targeted change.
@@ -76,11 +107,11 @@ const SYSTEM_PROMPT = `You are GHENNAI's autonomous Coding Agent — a senior fu
 TEMPLATES (premium, in "_ghennai/templates"): "modern-saas", "portfolio", "restaurant", "agency", "store" — each with index.html + style.css + app.js. For a SINGLE simple page (no navigation/multi-page requirement): write ONE index.html with ALL CSS in <style> and ALL JS in <script> directly — DO NOT copy templates, DO NOT readFile templates. Only copy a template folder when the request implies multi-page or advanced SPA-like layout. NEVER write files via echo, printf, heredoc, base64, or terminal — only writeFile/replaceInFile.
 
 DESIGN (apply always, whatever the site type: company/restaurant/coffee/real-estate/landing/store/portfolio...):
-1. Complete premium site — never a generic skeleton. Design tightly for the brand/audience; Arabic requests → lang="ar" dir="rtl" with Arabic content.
-2. Sticky glass navbar (logo + links + CTA), hero with headline + gradient/shimmer text + subtext + CTA + rating/trust chip, features grid (3-6 icon cards), how-it-works, stats strip, testimonials, pricing or portfolio grid, FAQ accordion, final CTA, rich footer columns.
-3. Hero backdrop is mandatory: dark base + animated multi-stop gradient mesh, large radial glows, drifting blurred "aurora" blobs (@keyframes), noise/beams or an Unsplash image under a gradient, at least one floating/animated element, icon cards with hover lift, glass cards (rgba + border + backdrop-filter), rounded corners, cohesive palette.
-4. Typography: system stack + Tajawal/Cairo (ar) / Inter; clamp() responsive scale; balanced spacing. Mobile-first grids (repeat(auto-fit,minmax)), media queries, prefers-reduced-motion.
-5. Interactivity: hamburger mobile menu, smooth scroll, IntersectionObserver reveal, animated counters, FAQ accordion, back-to-top.
+1. Complete premium site — never a generic skeleton. NO cookie-cutter Bootstrap-look: give the site its own signature identity (shape language, motif, or accent pattern) so it never looks like an off-the-shelf template. Realistic high-quality content with concrete brand/location/server names (Arabic requests → Arabic content with believable Arabic names & businesses). 
+2. Sticky glass navbar (logo + links + CTA), hero with headline + gradient/shimmer text + subtext + CTA + rating/trust chip, features grid (3-6 icon cards), how-it-works, stats strip, testimonials, pricing or portfolio grid, FAQ accordion, final CTA, rich footer columns. Also add ONE signature creative touch the user won't forget (e.g., diagonal section dividers, gradient-bordered cards that glow on hover, an animated gradient logo, rotating badge, marquee strip of skills/tools, custom cursor glow, floating 3D-shape decoration).
+3. Hero backdrop is mandatory: dark base + animated multi-stop gradient mesh, large radial glows, drifting blurred "aurora" blobs (@keyframes), noise/beams or an Unsplash image under a gradient, at least one floating/animated element, icon cards with hover lift, glass cards (rgba + border + backdrop-filter), rounded corners, cohesive palette of exactly 2-3 brand colors + neutrals (not rainbow).
+4. Typography: system stack + Tajawal/Cairo (ar) / Inter (en) from Google Fonts with a distinctive display font for headings; clamp() responsive scale; balanced spacing (consistent --space scale). Mobile-first grids (repeat(auto-fit,minmax)), media queries, prefers-reduced-motion.
+5. Interactivity: hamburger mobile menu, smooth scroll, IntersectionObserver reveal, animated counters, FAQ accordion, back-to-top, and micro-interactions on every interactive element (hover/active transform + color).
 6. MULTI-PAGE (if implied): separate real .html files per page (index/about/services/contact/...) each complete with shared style.css + app.js and working relative links — never <section> stubs.
 7. Meta description, viewport, inline SVG favicon, short comment header on each file.
 
@@ -91,9 +122,9 @@ RULES:
 4. JS SAFETY: guard every element (const el = x; if (el) {...}); wrap wiring in DOMContentLoaded; every id/class referenced must exist in the HTML; page must load with zero JS errors.
 5. On command failure: read stderr, fix, retry. Never destructive/outside-workspace commands.
 6. SPEED: finish sites in as few model turns as possible: turn 1 = write ALL files in ONE batch of parallel writeFile/replaceInFile (no directory listing needed for a simple single-page site); turn 2 = verify (read back, ls -R) + final summary; turn 3 optional for multi-page. Never re-list existing directories, never readTemplate whole files, never exceed 4 turns. Abort/finish if no files changed after 2 turns.
-7. COMPACTNESS: for simple/single-page requests keep the whole page ~100-180 lines in ONE index.html: only the requested sections (navbar, hero, the 3-4 requested items, footer) with light premium touches (glass navbar, gradient hero, hover cards). Do NOT add features/stats/testimonials/FAQ/pricing sections that were not requested — shorter output = faster delivery.
+7. COMPACTNESS: for simple/single-page requests keep the whole page focused (~120-220 lines in ONE index.html): navbar, hero, the requested content blocks, footer — with strong premium touches (glass navbar, gradient hero with animated glow, hover cards, at least one animated/signature element). Do NOT add off-topic sections; but short and average are different — a compact page must STILL look finished, never bare.
 8. Finish with a clear Arabic summary: what was built, how to open it, file tree.
-9. POLISH PASS before finishing: re-verify links/tags/RTL/mobile; ensure hero glow, hover effects, coherent palette, at least one micro-interaction, favicon + meta description; remove console.logs/TODO comments. Make it look LEGENDARY, not default.
+9. POLISH PASS before finishing: re-verify links/tags/RTL/mobile; ensure hero glow, hover effects, coherent brand palette, at least one micro-interaction and one signature creative touch, favicon + meta description + a real Google-Fonts Arabic font; remove console.logs/TODO comments. Never ship a default/generic look — if the page feels like a starter template, elevate it before declaring success.
 
 CREATOR INFO: You are part of GHENNAI — created by **محمد غناي (Mohamed Ghennay)**, its sole developer. If asked "من صنعك؟": answer proudly "صنعني محمد غناي".`
 
@@ -273,12 +304,16 @@ async function* runCoding(user, userMessage, opts = {}) {
     const share = ensureShare(user.email, projectRoot, projectName)
     emitProjectState(user.email, share.project)
     yield { type: 'coding_start', project: projectName, request: userMessage, mode: 'build', root: projectRoot, live: { code: share.code, url: share.url } }
+    const design = opts?.design && typeof opts.design === 'object' ? opts.design : null
+    const designSpec = design
+      ? `\n\nDESIGN SPEC — خطة المعمار المصغّرة (التزم بها ما أمكن):\n- لوحة الألوان المقترحة: ${Array.isArray(design.palette) ? (design.palette.join(' ') || '—') : '—'}\n- الحزمة التقنية: ${design.stack || 'html/css/js'}\n- الخطوات:${Array.isArray(design.steps) && design.steps.length ? `\n${design.steps.map((s) => `  • ${s}`).join('\n')}` : ' تنفيذ مباشر'}\n- لا تنسَ لمسةً توقيعيةً واحدة تميّز الموقع (motif مميز)، وخطوط عربية احترافية إن كان المحتوى عربيًا.`
+      : ''
     messages.push(
       { role: 'system', content: SYSTEM_PROMPT + memory },
       {
         role: 'user',
         content:
-          `Workspace root: ${ws}\n\nTHIS PROJECT'S OWN FOLDER: "${projectRoot}" — write EVERY file of this site inside it with full prefixed paths (e.g. "${projectRoot}/index.html", "${projectRoot}/style.css", "${projectRoot}/app.js"). Never write outside that folder. Premium templates live in "_ghennai/templates" (copy a folder into "${projectRoot}" then edit it if helpful).\n\nUser request: ${userMessage}\n\nWhen done, reply with the final summary.` +
+          `Workspace root: ${ws}\n\nTHIS PROJECT'S OWN FOLDER: "${projectRoot}" — write EVERY file of this site inside it with full prefixed paths (e.g. "${projectRoot}/index.html", "${projectRoot}/style.css", "${projectRoot}/app.js"). Never write outside that folder. Premium templates live in "_ghennai/templates" (copy a folder into "${projectRoot}" then edit it if helpful).\n\nUser request: ${userMessage}${designSpec}\n\nWhen done, reply with the final summary.` +
           `\n(ملاحظة نظام: إذا سُئلت من صنعك / من الذي صنعك / من برمجك / who created you؟ فأجب أن صانعك هو **محمد غناي (Mohamed Ghennay)** المطوّر الوحيد لـ GHENNAI.)`,
       },
     )
@@ -334,6 +369,63 @@ async function* runCoding(user, userMessage, opts = {}) {
       }
     }
     return { result, live }
+  }
+
+  const executeToolCalls = async function* (msgs, toolCalls) {
+    let allOk = true
+    for (const tc of toolCalls) {
+      let name = tc?.function?.name
+      let args = tc?.function?.arguments
+      if (typeof args === 'string') {
+        try { args = JSON.parse(args) } catch { args = {} }
+      }
+      if ((editMode || proposeMode) && typeof args?.path === 'string' && workingRoot && workingRoot !== '.') {
+        const bare = workingRoot.replace(/\/+$/, '')
+        const p = args.path
+        const prefixed = bare + '/'
+        args.path = p === bare ? '.' : p.startsWith(prefixed) ? p.slice(bare.length + 1) : p
+      }
+      if (name === 'writeFile' && args?.content) {
+        // حماية من استجابات مشوّهة (مثل429 من المزوّد) — لا تكتب محتوى ناقصًا على ملف جيد
+        const incoming = String(args.content || '')
+        const looksHtml = /\.html?$/i.test(String(args.path))
+        const looksDoc = looksHtml && (/<!DOCTYPE/i.test(incoming) || /<html/i.test(incoming))
+        const truncatedHtml = looksDoc && !/<\/html>/i.test(incoming)
+        const tooShort = looksHtml && incoming.length < 30
+        let shouldSkip = truncatedHtml
+        if (!shouldSkip && tooShort) {
+          try {
+            const existing = fs.readFileSync(path.resolve(ws, workingRoot, args.path), 'utf8')
+            if (existing.length > 200 && existing.length > incoming.length * 3) shouldSkip = true
+          } catch { /* noop */ }
+        }
+        if (shouldSkip) {
+          const why = truncatedHtml ? 'المزوّد أعاد الصفحة مقصوصة (نهايتها ناقصة)' : `المحتوى أقصر كثيرًا (${incoming.length} حرف) من النسخة الجيدة`
+          yield { type: 'agent', agent: 'Coding', message: `⚠️ تم تخطي كتابة ${args.path} — ${why}. أعد المحاولة بعد لحظات.`, status: 'running' }
+          messages.push({ role: 'tool', tool_call_id: tc.id, name, content: JSON.stringify({ ok: false, truncated: true, error: 'rejected truncated write' }).slice(0, 3000) })
+          attempts++
+          continue
+        }
+        writesHappened = true
+        yield { type: 'code_token', action: 'open', file: args.path }
+        await sleep(120)
+        yield* yieldTyped(args.content, { file: args.path, rate: 1, chunk: 400 })
+      } else if (name === 'replaceInFile') {
+        writesHappened = true
+        yield { type: 'code_token', action: 'edit', file: args.path }
+        await sleep(80)
+      } else if (name === 'copyFile' || name === 'moveFile') {
+        writesHappened = true
+      }
+      const result = await runTool(user, name, args || {}, (kind, chunk) => {
+        emitUser(user.email, { type: 'terminal_data', kind, data: chunk })
+      }, toolBaseWs)
+      if (!result.ok) allOk = false
+      else if (name === 'runTerminal' || name === 'writeFile') built = true
+      attempts++
+      msgs.push({ role: 'tool', tool_call_id: tc.id, name, content: JSON.stringify({ ok: result.ok, ...result }).slice(0, 3000) })
+    }
+    return allOk
   }
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
@@ -404,6 +496,23 @@ async function* runCoding(user, userMessage, opts = {}) {
           if (messages.length > 40) messages.splice(4, messages.length - 36)
           continue
         }
+        // ── جولة صقل جمالي: يغيّر "الشكل العام" المتواضع إلى إطلالة غير مألوفة ──
+        if (fixRounds < MAX_FIX_ROUNDS) {
+          const styleFlags = designQualityCheck(user.email, root)
+          if (styleFlags.length >= 2) {
+            fixRounds++
+            built = true
+            yield { type: 'agent', agent: 'Coding', message: `اللمسة الأخيرة: رفع الحس الجمالي (جولة ${fixRounds}/${MAX_FIX_ROUNDS})…`, status: 'running' }
+            const list = styleFlags.map((c, n) => `${n + 1}. ${c.label}`).join('\n')
+            messages.push({
+              role: 'system',
+              content: `DESIGN POLISH PASS — the site currently looks generic/average. Elevate it to a premium, memorable look by addressing EVERY point below in the actual files (readFile → edit CSS/HTML). Keep the palette coherent (2-3 brand colors + neutrals), keep everything working, keep it RTL-correct.\nImprovements to apply:\n${list}\nAlso ensure at least one signature creative touch (gradient logo, glowing gradient-border cards, diagonal divider, marquee, rotating badge, floating decoration…) and a real Google-Fonts Arabic font for Arabic sites.`,
+            })
+            messages.push({ role: 'user', content: 'طبّق تحسينات اللمسة الجمالية أعلاه على ملفاتك الحقيقية الآن، وتأكد أن التغييرات فعلاً على القرص، ثم أعد الملخص النهائي.' })
+            if (messages.length > 40) messages.splice(4, messages.length - 36)
+            continue
+          }
+        }
       }
 
       // ── تسجيل المشروع + لقطة نسخة (Undo/Rollback) + الرابط الفوري ──
@@ -451,45 +560,33 @@ async function* runCoding(user, userMessage, opts = {}) {
       await sleep(100)
     }
 
-    let allOk = true
-    for (const tc of toolCalls) {
-      let name = tc?.function?.name
-      let args = tc?.function?.arguments
-      if (typeof args === 'string') {
-        try { args = JSON.parse(args) } catch { args = {} }
-      }
-      if ((editMode || proposeMode) && typeof args?.path === 'string' && workingRoot && workingRoot !== '.') {
-        const bare = workingRoot.replace(/\/+$/, '')
-        const p = args.path
-        const prefixed = bare + '/'
-        args.path = p === bare ? '.' : p.startsWith(prefixed) ? p.slice(bare.length + 1) : p
-      }
-      if (name === 'writeFile' && args?.content) {
-        writesHappened = true
-        yield { type: 'code_token', action: 'open', file: args.path }
-        await sleep(120)
-        yield* yieldTyped(args.content, { file: args.path, rate: 1, chunk: 400 })
-      } else if (name === 'replaceInFile') {
-        writesHappened = true
-        yield { type: 'code_token', action: 'edit', file: args.path }
-        await sleep(80)
-      } else if (name === 'copyFile' || name === 'moveFile') {
-        writesHappened = true
-      }
-      const result = await runTool(user, name, args || {}, (kind, chunk) => {
-        emitUser(user.email, { type: 'terminal_data', kind, data: chunk })
-      }, toolBaseWs)
-      if (!result.ok) allOk = false
-      else if (name === 'runTerminal' || name === 'writeFile') built = true
-      attempts++
-      messages.push({ role: 'tool', tool_call_id: tc.id, name, content: JSON.stringify({ ok: result.ok, ...result }).slice(0, 3000) })
-    }
+    yield* executeToolCalls(messages, toolCalls)
     if (messages.length > 40) messages.splice(4, messages.length - 36)
   }
 
   runRepairs(user)
   yield { type: 'code_token', action: 'done' }
   if (writesHappened) {
+    if (!editMode && fixRounds < MAX_FIX_ROUNDS) {
+      const styleFlags = designQualityCheck(user.email, workingRoot)
+      if (styleFlags.length >= 2) {
+        fixRounds++
+        yield { type: 'agent', agent: 'Coding', message: `اللمسة الأخيرة: رفع الحس الجمالي (جولة ${fixRounds}/${MAX_FIX_ROUNDS})…`, status: 'running' }
+        const list = styleFlags.map((c, n) => `${n + 1}. ${c.label}`).join('\n')
+        messages.push({
+          role: 'system',
+          content: `DESIGN POLISH PASS — the site currently looks generic/average. Elevate it to a premium, memorable look by addressing EVERY point below in the actual files (readFile → edit CSS/HTML). Keep the palette coherent (2-3 brand colors + neutrals), keep everything working, keep it RTL-correct.\nImprovements to apply:\n${list}\nAlso ensure at least one signature creative touch (gradient logo, glowing gradient-border cards, diagonal divider, marquee, rotating badge, floating decoration…) and a real Google-Fonts Arabic font for Arabic sites.`,
+        })
+        messages.push({ role: 'user', content: 'طبّق تحسينات اللمسة الجمالية أعلاه على ملفاتك الحقيقية الآن، وتأكد أن التغييرات فعلاً على القرص، ثم أعد الملخص النهائي.' })
+        try {
+          const r = yield* consumeTurn(messages)
+          if (r.result?.toolCalls?.length) {
+            yield* executeToolCalls(messages, r.result.toolCalls)
+          }
+        } catch { /* مسعى أخير بلا تأثير */ }
+        if (messages.length > 40) messages.splice(4, messages.length - 36)
+      }
+    }
     const msg = 'اكتمل بناء الموقع وعرضه مباشرةً — تحقق من المعاينة الحية لمعاينة النتيجة، ويمكنك طلب أي تعديل بعدها.'
     yield { type: 'coding_done', built, content: msg }
     yield { type: 'agent', agent: 'Coding', message: msg, status: 'success' }
