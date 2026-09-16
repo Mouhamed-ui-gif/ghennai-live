@@ -166,6 +166,7 @@ interface AppState {
   editTarget: EditElement | null
   editBusy: boolean
   editPend: EditPending | null
+  studioOpen: boolean
 
   projects: ProjectInfo[]
   prjOpen: boolean
@@ -254,6 +255,8 @@ interface AppState {
 
   enterCodingMode: (project: string, mode: 'build' | 'edit', request: string) => void
   exitCodingMode: () => void
+  openStudio: () => void
+  closeStudio: () => void
   setCodingVoice: (b: boolean) => void
   codeToken: (chunk: { content?: string | null; file?: string | null; action?: string | null }) => void
   pushCodeAction: (a: Omit<CodeAction, 'id' | 'ts'>) => void
@@ -313,6 +316,7 @@ export const useApp = create<AppState>((set, get) => ({
   editTarget: null,
   editBusy: false,
   editPend: null,
+  studioOpen: false,
 
   projects: [],
   prjOpen: false,
@@ -367,7 +371,7 @@ export const useApp = create<AppState>((set, get) => ({
     set({
       user: null, token: null, msgs: [], arenaOpen: false, activity: [],
       termLines: [], previewUrl: null, deployState: 'idle', deployUrl: null,
-      codingOpen: false, codingShot: null, codeFiles: [], activeCodeFile: null, codeFileContent: null, editTarget: null, editBusy: false, editPend: null, liveFiles: {},
+      codingOpen: false, codingShot: null, codeFiles: [], activeCodeFile: null, codeFileContent: null, editTarget: null, editBusy: false, editPend: null, liveFiles: {}, studioOpen: false,
       brainOpen: false, sessionsOpen: false, resumeText: null, resumeTitle: null, brainBoard: {}, brainProgress: 0, brainPhase: 'idle', brainFeed: [], brainPaused: false,
 prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', speechOut: false, paused: false, interval: 0, team: true, models: {} },
     })
@@ -377,7 +381,7 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
     try {
       localStorage.removeItem('ghn_msgs')
     } catch { /* noop */ }
-    set({ msgs: [], activity: [], arenaOpen: false, termOpen: false, termLines: [], previewUrl: null, deployState: 'idle', codingOpen: false, codingShot: null, codeFiles: [], editTarget: null, editBusy: false, editPend: null, liveFiles: {} })
+    set({ msgs: [], activity: [], arenaOpen: false, termOpen: false, termLines: [], previewUrl: null, deployState: 'idle', codingOpen: false, codingShot: null, codeFiles: [], editTarget: null, editBusy: false, editPend: null, liveFiles: {}, studioOpen: false })
   },
 
   setBrainOpen: (b) => set({ brainOpen: b }),
@@ -546,6 +550,9 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
   setCodingLive: (live) => set((s) => (s.codingShot ? { codingShot: { ...s.codingShot, live } } : {})),
 
   exitCodingMode: () => set({ codingOpen: false, liveFiles: {} }),
+
+  openStudio: () => set({ studioOpen: true }),
+  closeStudio: () => set({ studioOpen: false }),
 
   setCodingVoice: (b) => set({ codingVoice: b }),
 

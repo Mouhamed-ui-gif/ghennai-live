@@ -19,6 +19,7 @@ const ArenaWorkbench = lazy(() => import('../components/arena/ArenaWorkbench').t
 const BrainPanel = lazy(() => import('../components/dashboard/BrainPanel').then((m) => ({ default: m.BrainPanel })))
 const SessionsPanel = lazy(() => import('../components/dashboard/SessionsPanel').then((m) => ({ default: m.SessionsPanel })))
 const CodingMode = lazy(() => import('../components/coding/CodingMode').then((m) => ({ default: m.CodingMode })))
+const BuildStudio = lazy(() => import('../components/coding/BuildStudio').then((m) => ({ default: m.BuildStudio })))
 
 function useIsDesktop() {
   const [d, setD] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width:1024px)').matches)
@@ -47,6 +48,7 @@ export function Dashboard() {
   const agent = useApp((s) => s.agent)
   const zen = useApp((s) => s.zen)
   const codingOpen = useApp((s) => s.codingOpen)
+  const studioOpen = useApp((s) => s.studioOpen)
   const isDesktop = useIsDesktop()
   const [sideOpen, setSideOpen] = useState(false)
   const mounted = useRef(false)
@@ -72,6 +74,7 @@ export function Dashboard() {
       if (!mod) {
         if (e.key === 'Escape') {
           if (useApp.getState().codingOpen) useApp.getState().exitCodingMode()
+          else if (useApp.getState().studioOpen) useApp.getState().closeStudio()
           else if (zen) useApp.getState().setZen(false)
         }
         return
@@ -123,6 +126,11 @@ export function Dashboard() {
       {codingOpen && (
         <Suspense fallback={<Fallback />}>
           <CodingMode />
+        </Suspense>
+      )}
+      {studioOpen && (
+        <Suspense fallback={<Fallback />}>
+          <BuildStudio />
         </Suspense>
       )}
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Send, Mic, MicOff, Paperclip, ImagePlus, Volume2, VolumeX, Copy, Check, Bot, ChevronDown, SquarePen, RotateCw, Trash2, Pencil, Check as CheckIcon, X, UsersRound, Focus, ThumbsUp, ThumbsDown } from 'lucide-react'
+import { Send, Mic, MicOff, Paperclip, ImagePlus, Volume2, VolumeX, Copy, Check, Bot, ChevronDown, SquarePen, RotateCw, Trash2, Pencil, Check as CheckIcon, X, UsersRound, Focus, ThumbsUp, ThumbsDown, LayoutTemplate } from 'lucide-react'
 import { useApp } from '../../store/app'
 import { useChat } from '../../hooks/useChat'
 import { useI18n } from '../../i18n'
@@ -357,6 +357,14 @@ export function ChatPanel() {
           {liveOn ? (lang === 'ar' ? 'حي' : 'Live') : '…'}
         </span>
         <button
+          onClick={() => useApp.getState().openStudio()}
+          title={lang === 'ar' ? 'ستوديو البناء — واجهة إرشادية لإنشاء موقع خطوة بخطوة' : 'Build Studio — guided site creation wizard'}
+          className="flex items-center gap-1.5 rounded-xl bg-violet-500/10 px-2.5 py-1.5 text-xs font-semibold text-violet-300 ring-1 ring-violet-400/30 transition hover:bg-violet-400/20 hover:text-white"
+        >
+          <LayoutTemplate size={14} />
+          {lang === 'ar' ? 'ستوديو البناء' : 'Build Studio'}
+        </button>
+        <button
           onClick={() => useApp.getState().resetChat()}
             aria-label={t('chat.new')}
             title={`${t('chat.new')} (⌘N)`}
@@ -411,6 +419,25 @@ export function ChatPanel() {
                   {t(('agent.' + agent) as never)}
                 </h2>
                 <p className="mt-1 max-w-md text-sm text-slate-300">{lang === 'ar' ? a.world.taglineAr : a.world.taglineEn}</p>
+              </div>
+
+              <div className="mb-3">
+                <button
+                  onClick={() => useApp.getState().openStudio()}
+                  className="group flex w-full items-center gap-4 rounded-2xl border border-violet-400/25 bg-violet-500/8 p-4 text-start transition hover:border-violet-400/50 hover:bg-violet-500/15"
+                  style={{ boxShadow: '0 0 30px rgba(124,58,237,.08)' }}
+                >
+                  <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 text-night-950">
+                    <LayoutTemplate size={22} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[15px] font-bold text-white">ابنِ موقعك من ستوديو البناء 🚀</span>
+                    <span className="block text-[12px] text-slate-400">أجب على 3 أسئلة سريعة — سنبني لك موقعًا كاملًا برابط فوري حي بيتحّدث أمامك.</span>
+                  </span>
+                  <span className="ms-auto shrink-0 rounded-xl bg-violet-500 px-3 py-1.5 text-[12px] font-bold text-white transition group-hover:bg-violet-400">
+                    ابدأ الآن
+                  </span>
+                </button>
               </div>
 
               <div className="mb-2 flex flex-wrap justify-center gap-2">
