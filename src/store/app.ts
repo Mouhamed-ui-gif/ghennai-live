@@ -570,7 +570,8 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
         }
       }
       if (chunk.action === 'done') {
-        return { codingShot: { ...shot, typed: null }, liveFiles: {} }
+        const lastContent = s.activeCodeFile && s.liveFiles[s.activeCodeFile] ? s.liveFiles[s.activeCodeFile] : s.codeFileContent
+        return { codingShot: { ...shot, typed: null }, liveFiles: {}, codeFileContent: lastContent }
       }
       if (chunk.action === 'boot') {
         const liveFiles = { ...s.liveFiles }

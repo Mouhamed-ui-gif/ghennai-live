@@ -130,9 +130,10 @@ export function CodingMode() {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const blobsRef = useRef<string[]>([])
   const logRef = useRef<HTMLDivElement | null>(null)
-  const typingScrollRef = useRef<HTMLPreElement | null>(null)
+  const typingScrollRef = useRef<HTMLDivElement | null>(null)
   const docsRef = useRef<Map<string, string>>(new Map())
   const liveRef = useRef<{ files: { rel: string; content: string }[]; base: string | null }>({ files: [], base: null })
+  const typedEditorRef = useRef<{ getEditor: () => unknown; getValue: () => string } | null>(null)
 
   const locateElement = (el: EditElement): { file: string; line: number | null } => {
     let content: string | null = docsRef.current.get('index.html') ?? null
@@ -277,10 +278,12 @@ export function CodingMode() {
   }, [])
 
   useEffect(() => {
-    if (typingScrollRef.current && shot?.typed?.file && shot?.typed?.text) {
-      typingScrollRef.current.scrollTop = typingScrollRef.current.scrollHeight
-    }
-  }, [shot?.typed?.text, shot?.typed?.file])
+    if (!(shot?.typed?.text && shot.typed.file === activeCodeFile)) return
+    const inst = typedEditorRef.current?.getEditor?.() as { revealLine?: (l: number, s: number) => void; getModel?: () => { getLineCount?: () => number } | null } | null
+    const model = inst?.getModel?.()
+    const last = (model?.getLineCount?.() ?? 1) || 1
+    inst?.revealLine?.(last, 3)
+  }, [shot?.typed?.text, shot?.typed?.file, activeCodeFile])
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
@@ -688,22 +691,28 @@ export function CodingMode() {
                 <div className="flex h-full items-center justify-center text-[12px] text-slate-600 select-none">
                   {shot.running ? 'جارٍ بناء الموقع… ستظهر الملفات هنا مباشرة' : 'بانتظار أن يبدأ الوكيل الكتابة…'}
                 </div>
-              ) : typingHere ? (
-                <pre
-                  ref={typingScrollRef}
-                  className="h-full overflow-auto bg-night-950/60 p-4 font-mono text-[12.5px] leading-relaxed text-emerald-300"
-                  dir="ltr"
-                >
-                  {typing.text}
-                  <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-emerald-400 align-middle" />
-                </pre>
               ) : (
-                <Editor
-                  language={extLang(activeCodeFile || '')}
-                  theme="vs-dark"
-                  value={codeFileContent ?? ''}
-                  options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, wordWrap: 'on' }}
-                />
+                <div ref={typingScrollRef} className="h-full">
+                  <Editor
+                    onMount={(ed) => {
+                      typedEditorRef.current = { getEditor: () => ed, getValue: () => ed.getValue() }
+                    }}
+                    language={extLang(activeCodeFile || '')}
+                    theme="vs-dark"
+                    value={typingHere ? typing!.text : (codeFileContent ?? '')}
+                    options={{
+                      readOnly: true,
+                      minimap: { enabled: false },
+                      fontSize: 13.5,
+                      scrollBeyondLastLine: false,
+                      wordWrap: 'on',
+                      lineNumbers: 'on',
+                      smoothScrolling: true,
+                      cursorBlinking: typingHere ? 'phase' : 'blink',
+                      cursorStyle: 'line',
+                    }}
+                  />
+                </div>
               )}
             </div>
           </div>

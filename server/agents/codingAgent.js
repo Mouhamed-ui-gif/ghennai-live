@@ -371,6 +371,7 @@ async function* runCoding(user, userMessage, opts = {}) {
     return { result, live }
   }
 
+  const goodFiles = new Map()
   const executeToolCalls = async function* (msgs, toolCalls) {
     let allOk = true
     for (const tc of toolCalls) {
@@ -409,7 +410,7 @@ async function* runCoding(user, userMessage, opts = {}) {
         writesHappened = true
         yield { type: 'code_token', action: 'open', file: args.path }
         await sleep(120)
-        yield* yieldTyped(args.content, { file: args.path, rate: 1, chunk: 400 })
+        yield* yieldTyped(args.content, { file: args.path, rate: 3, chunk: 64 })
       } else if (name === 'replaceInFile') {
         writesHappened = true
         yield { type: 'code_token', action: 'edit', file: args.path }
@@ -420,10 +421,33 @@ async function* runCoding(user, userMessage, opts = {}) {
       const result = await runTool(user, name, args || {}, (kind, chunk) => {
         emitUser(user.email, { type: 'terminal_data', kind, data: chunk })
       }, toolBaseWs)
+      let toolOut = JSON.stringify({ ok: result.ok, ...result }).slice(0, 3000)
+      if (result.ok && name === 'writeFile' && /\.html?$/i.test(String(args.path))) {
+        // لقطة نسخة جيدة: أي كتابة لاحقة ناقصة تُرجع الملف لحالته السليمة بدل تدمير الموقع
+        try {
+          const target = path.resolve(toolBaseWs || ws, args.path)
+          const written = fs.readFileSync(target, 'utf8')
+          const key = String(args.path).replace(/^[\/\\]+/, '').split('?')[0]
+          const looksDoc = /<!DOCTYPE/i.test(written) || /<html/i.test(written)
+          const incomplete = looksDoc && !/<\/html>/i.test(written)
+          if (incomplete) {
+            const good = goodFiles.get(key)
+            if (good != null && good !== written) {
+              fs.writeFileSync(target, good, 'utf8')
+              const msgText = `⚠️ تمت استعادة index.html من النسخة السليمة — المزوّد أعاد الصفحة ناقصة (بدون </html>).`
+              yield { type: 'agent', agent: 'Coding', message: msgText, status: 'running' }
+              toolOut = JSON.stringify({ ok: false, restored: true, error: 'restored good snapshot after incomplete write' })
+              allOk = false
+            }
+          } else {
+            goodFiles.set(key, written)
+          }
+        } catch { /* noop */ }
+      }
       if (!result.ok) allOk = false
       else if (name === 'runTerminal' || name === 'writeFile') built = true
       attempts++
-      msgs.push({ role: 'tool', tool_call_id: tc.id, name, content: JSON.stringify({ ok: result.ok, ...result }).slice(0, 3000) })
+      msgs.push({ role: 'tool', tool_call_id: tc.id, name, content: toolOut })
     }
     return allOk
   }
