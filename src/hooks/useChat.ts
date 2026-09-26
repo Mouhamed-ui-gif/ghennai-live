@@ -1,7 +1,7 @@
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { useApp } from '../store/app'
 import { chatStream, workspace, vision, deploy } from '../api/client'
-import { handleChatEvent, refreshTree } from './chatEvents'
+import { handleChatEvent } from './chatEvents'
 
 export interface ChatOpts {
   onCodingDone?: (project: string, built: boolean) => void
@@ -9,7 +9,6 @@ export interface ChatOpts {
 
 export function useChat() {
   const { addUserMsg, setBusy, pushActivity, openArena } = useApp.getState()
-  const runner = useRef<{ stop: () => void } | null>(null)
 
   const send = useCallback(
     async (content: string, agent?: string) => {
@@ -23,9 +22,10 @@ export function useChat() {
       await chatStream(
         { message: content, agent },
         (e) => handleChatEvent(e),
-        () => {
+        async () => {
           useApp.getState().setBusy(false)
-          void refreshTree()
+          const { refreshTree } = await import('./chatEvents')
+          await refreshTree()
           useApp.getState().bumpPreview()
           setTimeout(() => useApp.getState().setBusy(false), 2000)
         }
@@ -40,7 +40,7 @@ export function useChat() {
       const { agent } = useApp.getState()
       const buildReq = /(ابن|انشئ|اصنع|صمم|نف[ي]?ذ|حول|تحويل|موقع|build|create|make|convert|code|نفّد)/i.test(intent || '') || agent === 'Coding'
       setBusy(true)
-      useApp.getState().addAssistantMsg('🖼️ **جارٍ تحليل الصورة محليًا (moondream)…** قد يستغرق دقيقة تقريبًا.')
+      useApp.getState().addAssistantMsg('🖼️ **جارٍ تحليل الصورة…** ثوانٍ ويكون جاهزًا ⚡')
       pushActivity({ agent: 'Vision', message: buildReq ? '🖼️ تحليل الصورة وتحويلها إلى مواصفة بناء…' : '🖼️ تحليل الصورة…', status: 'running' })
       try {
         const d = await vision(dataUrl, buildReq ? 'build' : 'describe')
@@ -71,9 +71,10 @@ export function useChat() {
       const d = await workspace.upload(file)
       useApp.getState().addAssistantMsg(`📎 تم رفع \`${d.path}\` إلى مساحة العمل (${d.size} بايت).`)
       useApp.getState().pushToast({ kind: 'success', title: 'تم رفع الملف', message: `${d.path} (${d.size} بايت)` })
-      void refreshTree()
+      const { refreshTree } = await import('./chatEvents')
+      await refreshTree()
     },
-    [refreshTree]
+    []
   )
 
   const regenerate = useCallback(
@@ -102,7 +103,18 @@ export function useChat() {
     [send]
   )
 
-  return { send, analyzeImage, uploadFile, regenerate, editAndSend }
+  /** إصلاح تلقائي حقيقي: يستدعي الـAgent فعليًا بخطأ + الطلب الأصلي (وليس زرًا وهميًا) */
+  const fixError = useCallback(
+    async (errorText: string, agent?: string) => {
+      const { msgs } = useApp.getState()
+      const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
+      const prompt = `🔧 أصلح هذا الخطأ من الجذر تلقائيًا: اقرأ الملفات والسجلات المتعلقة أولًا (searchFiles/readFile/previewLogs)، حدد السبب، نفّذ الإصلاح بالأدوات، ثم تحقق.\nالطلب الأصلي: ${lastUser ? lastUser.content.slice(0, 300) : '—'}\nالخطأ:\n${errorText.slice(0, 800)}`
+      await send(prompt, agent || 'Coding')
+    },
+    [send]
+  )
+
+  return { send, analyzeImage, uploadFile, regenerate, editAndSend, fixError }
 }
 
 export function publishToGitHub(project: string) {

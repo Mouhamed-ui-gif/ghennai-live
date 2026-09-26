@@ -604,6 +604,19 @@
 }
 .md-body hr { border: 0; border-top: 1px solid rgba(255, 255, 255, 0.12); margin: 0.8em 0; }
 .md-body a { color: #67e8f9; text-decoration: underline; text-underline-offset: 3px; }
+/* بطاقة رابط الموقع المبني: زر بارز لا يُفوَّت */
+.md-body a.live-link {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #10b981, #22d3ee);
+  color: #04121a !important;
+  font-weight: 800;
+  text-decoration: none;
+  direction: ltr;
+  box-shadow: 0 4px 24px rgba(34, 211, 238, 0.35);
+}
 .md-body code.inline {
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.1);
@@ -712,4 +725,68 @@
 }
 .tilt-3d .tilt-child {
   transform: translateZ(24px);
+}
+
+/* ═══════ الطبقة ثلاثية الأبعاد الغامرة (Immersive3D) ═══════ */
+.orb-grid {
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  bottom: -42%;
+  height: 75vh;
+  transform: perspective(600px) rotateX(68deg);
+  transform-origin: center top;
+  background-image:
+    linear-gradient(rgba(34, 211, 238, 0.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(139, 92, 246, 0.14) 1px, transparent 1px);
+  background-size: 58px 58px;
+  mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent 80%);
+  animation: grid-scroll 3.2s linear infinite;
+  opacity: 0.7;
+}
+.orb-sheen {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 35% at 50% 0%, rgba(139, 92, 246, 0.14), transparent 70%),
+    radial-gradient(ellipse 50% 30% at 80% 100%, rgba(6, 182, 212, 0.1), transparent 70%);
+  mix-blend-mode: screen;
+}
+.hero-3d-stage {
+  perspective: 1400px;
+  transform-style: preserve-3d;
+}
+.hero-3d-main {
+  transform: rotateX(6deg) rotateY(-8deg);
+  transform-style: preserve-3d;
+  transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hero-3d-stage:hover .hero-3d-main {
+  transform: rotateX(2deg) rotateY(-3deg) translateZ(10px);
+}
+.hero-3d-layer {
+  transform: translateZ(46px);
+}
+.hero-3d-layer-back {
+  transform: translateZ(-40px) scale(0.96);
+}
+.orb-float {
+  animation: orb-float 7s ease-in-out infinite;
+  transform-style: preserve-3d;
+}
+@keyframes orb-float {
+  0%, 100% { transform: translateY(0) translateZ(30px) rotateY(-6deg); }
+  50% { transform: translateY(-16px) translateZ(60px) rotateY(6deg); }
+}
+.glass-3d {
+  background: linear-gradient(160deg, rgba(255,255,255,0.09), rgba(255,255,255,0.02));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 30px 80px -20px rgba(0, 0, 0, 0.8),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 1px 0 rgba(255, 255, 255, 0.12) inset;
+  backdrop-filter: blur(22px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .orb-grid, .universe-stars, .cube, .orb-float, .shine::after { animation: none !important; }
 }

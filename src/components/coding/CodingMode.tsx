@@ -233,6 +233,7 @@ export function CodingMode() {
 
   /** المعاينة الحية: نرسم مباشرة من liveFiles دون انتظار الحفظ على القرص */
   const liveFiles = useApp((s) => s.liveFiles)
+  const shotKey = `${shot?.typed?.file || ''}|${shot?.done ? '1' : '0'}|${shot?.built ? '1' : '0'}|${Object.keys(liveFiles).length}`
   useEffect(() => {
     if (!shot || !Object.keys(liveFiles).length) return
     const id = setTimeout(() => {
@@ -247,7 +248,8 @@ export function CodingMode() {
       applyDoc(baseFiles, liveRef.current?.base ?? null, true)
     }, 150)
     return () => clearTimeout(id)
-  }, [liveFiles, applyDoc])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shotKey])
 
   useEffect(() => {
     if (!activeCodeFile) {

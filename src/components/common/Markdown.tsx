@@ -34,6 +34,18 @@ function inline(text: string, keyBase: string): React.ReactNode[] {
       i += link[0].length
       continue
     }
+    // روابط عارية تتحول لأزرار نقر حقيقية (روابط المواقع المبنية)
+    const bare = rest.match(/^(https?:\/\/[^\s<>"')\]]+|\/live\/[A-Za-z0-9]{6,12}\/?)/)
+    if (bare) {
+      const href = bare[1].startsWith('/') ? `${window.location.origin}${bare[1]}` : bare[1]
+      push(
+        <a href={href} target="_blank" rel="noreferrer" className="live-link">
+          {bare[1].length > 60 ? `${bare[1].slice(0, 60)}…` : bare[1]}
+        </a>
+      )
+      i += bare[0].length
+      continue
+    }
     const bold = rest.match(/^\*\*([^*]+)\*\*/)
     if (bold) {
       push(<strong>{inline(bold[1], `${keyBase}-b`)}</strong>)

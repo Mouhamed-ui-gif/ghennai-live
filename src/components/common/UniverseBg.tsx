@@ -1,4 +1,5 @@
 import { StreamBg } from './StreamBg'
+import { Immersive3D } from './Immersive3D'
 
 const UNIVERSE_IMAGES = [
   'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=1920&q=70',
@@ -9,18 +10,19 @@ const UNIVERSE_IMAGES = [
   'https://images.unsplash.com/photo-1439405326854-014607f694d7?auto=format&fit=crop&w=1920&q=70',
 ]
 
-/** خلفية ثابتة لكامل الصفحة: مشاهد طبيعية حقيقية تتبدّل بنعومة */
+/** خلفية ثابتة لكامل الصفحة: طبقة ثلاثية الأبعاد تفاعلية + مشاهد طبيعية */
 export function UniverseBg() {
   return (
     <div className="universe-bg" aria-hidden>
       <StreamBg
         images={UNIVERSE_IMAGES}
-        opacity={0.88}
-        cycleMs={9000}
+        opacity={0.5}
+        cycleMs={12000}
         className="universe-video"
       >
         <div className="universe-grid" />
       </StreamBg>
+      <Immersive3D density={150} />
       <div className="black-hole">
         <span className="black-hole-core" />
         <span className="black-hole-ring" />

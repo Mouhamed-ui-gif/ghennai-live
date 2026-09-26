@@ -16,7 +16,6 @@ function speak(text: string, lang: string) {
 
 export function SessionsPanel({ onClose }: { onClose: () => void }) {
   const { lang } = useI18n()
-  const sessions = useApp((s) => s.sessions)
   const msgs = useApp((s) => s.sessionMsgs)
   const setMsgs = useApp((s) => s.setSessionMsgs)
   const [list, setList] = useState<SessionLite[]>([])

@@ -19,7 +19,7 @@ router.get('/prefs', requireAuth, (req, res) => {
 router.post('/prefs', requireAuth, (req, res) => {
   const { key, value } = req.body || {}
   if (!key) return res.status(400).json({ error: 'key required' })
-  const allowed = ['collab', 'supervisor', 'autoGrade', 'speed', 'paused', 'interval', 'models', 'team', 'solo', 'speechOut', 'pipeline']
+  const allowed = ['collab', 'supervisor', 'autoGrade', 'speed', 'paused', 'interval', 'models', 'team', 'solo', 'speechOut', 'pipeline', 'agentMode']
   if (!allowed.includes(key)) return res.status(400).json({ error: 'invalid key' })
   const prefs = setPref(req.user.email, key, value)
   res.json(prefs)

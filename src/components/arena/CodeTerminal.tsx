@@ -29,7 +29,7 @@ interface CodeTerminalProps {
   onDragStart?: (e: React.PointerEvent<HTMLDivElement>) => void
 }
 
-export function CodeTerminal({ header = 'agent:~$', cmdPrefix = '❯ ', termH, maxTerm, onMax, onClose, onDragStart }: CodeTerminalProps) {
+export function CodeTerminal({ header = 'agent:~$', cmdPrefix = '❯ ', termH, onMax, onClose, onDragStart }: CodeTerminalProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Send, Mic, MicOff, Paperclip, ImagePlus, Volume2, VolumeX, Copy, Check, Bot, ChevronDown, SquarePen, RotateCw, Trash2, Pencil, Check as CheckIcon, X, UsersRound, Focus, ThumbsUp, ThumbsDown, LayoutTemplate } from 'lucide-react'
+import { Send, Square, Wrench, Mic, MicOff, Paperclip, ImagePlus, Volume2, VolumeX, Copy, Check, Bot, ChevronDown, SquarePen, RotateCw, Trash2, Pencil, Check as CheckIcon, X, UsersRound, Focus, ThumbsUp, ThumbsDown, LayoutTemplate, Code2 } from 'lucide-react'
 import { useApp } from '../../store/app'
 import { useChat } from '../../hooks/useChat'
 import { useI18n } from '../../i18n'
@@ -8,7 +8,7 @@ import { AgentSelector } from './AgentSelector'
 import { Markdown } from '../common/Markdown'
 import { resizeImage } from './image'
 import { startSpeech, startServerSpeech, speakText, stopSpeaking, voiceFor, shouldUseServerStt, initVoiceStt } from './voice'
-import { brain } from '../../api/client'
+import { brain, chatCtl } from '../../api/client'
 import { initLive, onLive, onLiveStatus } from '../../api/live'
 
 export function ChatPanel() {
@@ -17,7 +17,10 @@ export function ChatPanel() {
   const busy = useApp((s) => s.busy)
   const agent = useApp((s) => s.agent)
   const prefs = useApp((s) => s.prefs)
-  const { send, analyzeImage, uploadFile, regenerate, editAndSend } = useChat()
+  const railSession = useApp((s) => s.railSession)
+  const railOpen = useApp((s) => s.railOpen)
+  const zenMode = useApp((s) => s.zen)
+  const { send, analyzeImage, uploadFile, regenerate, editAndSend, fixError } = useChat()
 
   const [input, setInput] = useState('')
   const [listening, setListening] = useState(false)
@@ -111,14 +114,57 @@ export function ChatPanel() {
     [analyzeImage, input]
   )
 
+  // ── منطقة تجهيز المرفقات: تُعرض المعاينة فورًا ولا يُرسل شيء حتى يشرح المستخدم ويضغط إرسال ──
+  const [staged, setStaged] = useState<{ file: File; url: string; isImage: boolean } | null>(null)
+
+  const clearStaged = useCallback(() => {
+    setStaged((prev) => {
+      if (prev) {
+        try { URL.revokeObjectURL(prev.url) } catch { /* noop */ }
+      }
+      return null
+    })
+  }, [])
+
+  useEffect(() => () => {
+    try { if (staged) URL.revokeObjectURL(staged.url) } catch { /* noop */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const stageAttachment = useCallback((f: File | undefined | null) => {
+    if (!f) return
+    setStaged((prev) => {
+      if (prev) {
+        try { URL.revokeObjectURL(prev.url) } catch { /* noop */ }
+      }
+      return null
+    })
+    try {
+      const url = URL.createObjectURL(f)
+      setStaged({ file: f, url, isImage: f.type.startsWith('image/') })
+    } catch {
+      useApp.getState().pushToast({ kind: 'error', title: 'تعذر تجهيز الملف', message: f.name })
+    }
+  }, [])
+
   const setBusyHint = (b: boolean) => useApp.getState().setBusy(b)
 
   const submit = async () => {
     const m = input.trim()
-    if (!m || busy) return
+    if ((!m && !staged) || busy) return
     setInput('')
     if (taRef.current) taRef.current.style.height = 'auto'
-    await send(m, agent)
+    // المرفق المجهّز يُرسل مع شرح المستخدم في نفس اللحظة — لا قبله أبدًا
+    const att = staged
+    if (att) clearStaged()
+    if (att?.isImage) {
+      await sendImage(att.file)
+    } else if (att) {
+      await uploadFile(att.file)
+      if (m) await send(m, agent)
+    } else {
+      await send(m, agent)
+    }
   }
 
   const resumeText = useApp((s) => s.resumeText)
@@ -128,7 +174,7 @@ export function ChatPanel() {
     const text = resumeText
     if (taRef.current) taRef.current.style.height = 'auto'
     void send(text, useApp.getState().agent)
-  }, [resumeText])
+  }, [resumeText, send])
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -327,8 +373,7 @@ export function ChatPanel() {
     setDrag(false)
     const f = e.dataTransfer.files?.[0]
     if (!f) return
-    if (f.type.startsWith('image/')) void sendImage(f)
-    else void uploadFile(f)
+    stageAttachment(f)
   }
 
   const a = AGENT_MAP[agent]
@@ -357,13 +402,23 @@ export function ChatPanel() {
           {liveOn ? (lang === 'ar' ? 'حي' : 'Live') : '…'}
         </span>
         <button
-          onClick={() => useApp.getState().openStudio()}
-          title={lang === 'ar' ? 'ستوديو البناء — واجهة إرشادية لإنشاء موقع خطوة بخطوة' : 'Build Studio — guided site creation wizard'}
+          onClick={() => useApp.getState().openStudioIDE()}
+          title={lang === 'ar' ? 'استوديو البناء — بيئة التطوير الكاملة: ملفات + معاينة حية + وكيل + تيرمينال' : 'Build Studio IDE — full dev environment: files + live preview + agent + terminal'}
           className="flex items-center gap-1.5 rounded-xl bg-violet-500/10 px-2.5 py-1.5 text-xs font-semibold text-violet-300 ring-1 ring-violet-400/30 transition hover:bg-violet-400/20 hover:text-white"
         >
           <LayoutTemplate size={14} />
-          {lang === 'ar' ? 'ستوديو البناء' : 'Build Studio'}
+          {lang === 'ar' ? 'استوديو البناء' : 'Build Studio'}
         </button>
+        {railSession && !railOpen && (
+          <button
+            onClick={() => useApp.getState().setRailOpen(true)}
+            title={lang === 'ar' ? 'إظهار لوح الكود الحي بجانب المحادثة' : 'Show live code rail'}
+            className="flex items-center gap-1.5 rounded-xl bg-cyan-500/10 px-2.5 py-1.5 text-xs font-semibold text-cyan-300 ring-1 ring-cyan-400/30 transition hover:bg-cyan-400/20 hover:text-white"
+          >
+            <Code2 size={14} />
+            {lang === 'ar' ? 'الكود الحي' : 'Live code'}
+          </button>
+        )}
         <button
           onClick={() => useApp.getState().resetChat()}
             aria-label={t('chat.new')}
@@ -376,10 +431,10 @@ export function ChatPanel() {
         <button
           data-zen
           onClick={() => useApp.getState().setZen(!useApp.getState().zen)}
-          aria-pressed={useApp((s) => s.zen)}
+          aria-pressed={zenMode}
           title={lang === 'ar' ? 'وضع التركيز — يخفي كل ما عدا الدردشة (Esc للخروج)' : 'Zen mode — hide everything but chat (Esc to exit)'}
           className={`flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs transition ${
-            useApp((s) => s.zen) ? 'text-amber-300 ring-1 ring-amber-400/30 bg-amber-400/10' : 'text-slate-300 hover:bg-white/10 hover:text-white'
+            zenMode ? 'text-amber-300 ring-1 ring-amber-400/30 bg-amber-400/10' : 'text-slate-300 hover:bg-white/10 hover:text-white'
           }`}
         >
           <Focus size={14} />
@@ -474,6 +529,11 @@ export function ChatPanel() {
                         <button onClick={() => regenerate(lastUserText, m.agent)} aria-label="إعادة توليد" className="rounded p-1 text-slate-500 transition hover:text-white" title="إعادة توليد">
                           <RotateCw size={12} />
                         </button>
+                        {/^(⚠️|❌|⛔)|فشل|خطأ/.test(m.content) && (
+                          <button onClick={() => fixError(m.content, m.agent)} aria-label="إصلاح تلقائي" className="rounded p-1 text-amber-400 transition hover:text-amber-200" title="إصلاح تلقائي: يستدعي الـAgent لتشخيص الخطأ وإصلاحه">
+                            <Wrench size={12} />
+                          </button>
+                        )}
                         <button onClick={() => removePair(m.id, 'assistant')} aria-label="حذف" className="rounded p-1 text-slate-500 transition hover:text-rose-400" title="حذف">
                           <Trash2 size={12} />
                         </button>
@@ -628,6 +688,24 @@ export function ChatPanel() {
 
           <div className="flex-1">
             {micErr && <p className="mb-1 text-[11px] text-rose-300">{micErr}</p>}
+            {staged && (
+              <div className="mb-1.5 flex items-center gap-2 rounded-2xl border border-cyan-400/25 bg-cyan-500/5 p-1.5">
+                {staged.isImage ? (
+                  <img src={staged.url} alt="معاينة المرفق" className="h-12 w-12 shrink-0 rounded-xl border border-white/10 object-cover" />
+                ) : (
+                  <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/5 text-lg">📄</span>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[12px] font-semibold text-slate-200" dir="auto">{staged.file.name}</p>
+                  <p className="text-[10px] text-slate-500">
+                    {(staged.file.size / 1024).toFixed(0)} KB · {lang === 'ar' ? 'لن يُرسل حتى تشرح الغرض وتضغط إرسال' : 'Not sent until you explain and press send'}
+                  </p>
+                </div>
+                <button onClick={clearStaged} aria-label="إزالة المرفق" title="إزالة المرفق" className="shrink-0 rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white">
+                  <X size={15} />
+                </button>
+              </div>
+            )}
             <textarea
               ref={taRef}
               value={input}
@@ -647,23 +725,38 @@ export function ChatPanel() {
 
           <AgentSelector />
 
-          <button
-            onClick={submit}
-            disabled={busy || !input.trim()}
-            className="btn-primary shine !rounded-3xl !px-4 !py-3 disabled:opacity-40"
-            style={{ background: `linear-gradient(135deg, ${a.color}, ${a.world.glow})` }}
-            aria-label={t('chat.send')}
-          >
-            <Send size={18} />
-          </button>
+          {busy ? (
+            <button
+              onClick={() => {
+                chatCtl.stop().catch(() => undefined)
+                useApp.getState().pushActivity({ agent: 'User', message: '⏹️ طلب إيقاف التنفيذ…', status: 'info' })
+              }}
+              className="btn-primary shine !rounded-3xl !px-4 !py-3"
+              style={{ background: 'linear-gradient(135deg, #f43f5e, #f59e0b)' }}
+              aria-label="إيقاف التنفيذ"
+              title="إيقاف التنفيذ الحقيقي (Agent + العملية)"
+            >
+              <Square size={18} />
+            </button>
+          ) : (
+            <button
+              onClick={submit}
+              disabled={!input.trim() && !staged}
+              className="btn-primary shine !rounded-3xl !px-4 !py-3 disabled:opacity-40"
+              style={{ background: `linear-gradient(135deg, ${a.color}, ${a.world.glow})` }}
+              aria-label={t('chat.send')}
+            >
+              <Send size={18} />
+            </button>
+          )}
         </div>
         <p className="mt-1.5 text-center text-[10px] text-slate-400">
           GHENNAI · صُنع بواسطة <b className="text-white/70">محمد غناي</b> · Ollama محلي · بياناتك على جهازك · <span style={{ color: a.color }}>{agent}</span>
         </p>
       </div>
 
-      <input ref={fileRef} type="file" multiple={false} hidden onChange={(e) => e.target.files?.[0] && void uploadFile(e.target.files[0])} />
-      <input ref={imgRef} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && void sendImage(e.target.files[0])} />
+      <input ref={fileRef} type="file" multiple={false} hidden onChange={(e) => { stageAttachment(e.target.files?.[0]); e.target.value = '' }} />
+      <input ref={imgRef} type="file" accept="image/*" hidden onChange={(e) => { stageAttachment(e.target.files?.[0]); e.target.value = '' }} />
     </div>
   )
 }

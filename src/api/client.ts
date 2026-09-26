@@ -78,6 +78,31 @@ export function chatStream(body: Record<string, unknown>, onEvent: EventHandler,
     .catch((err) => onEvent({ type: 'error', error: String(err?.message || err) }))
 }
 
+export const approvals = {
+  pending: () => http('/api/approvals/pending'),
+  decide: (id: number, decision: 'approved' | 'rejected') =>
+    http(`/api/approvals/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  mode: () => http('/api/approvals/mode'),
+  setMode: (mode: 'safe' | 'assisted' | 'autonomous') =>
+    http('/api/approvals/mode', { method: 'POST', body: JSON.stringify({ mode }) }),
+}
+
+export const chatCtl = {
+  stop: () => http('/api/chat/stop', { method: 'POST' }),
+  running: () => http('/api/chat/running'),
+}
+
+export const preview = {
+  start: (cwd: string) => http('/api/preview/start', { method: 'POST', body: JSON.stringify({ cwd }) }),
+  stop: (id: string) => http('/api/preview/stop', { method: 'POST', body: JSON.stringify({ id }) }),
+  list: () => http('/api/preview/list'),
+  logs: (id: string, tail = 200) => http(`/api/preview/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
+  url: (id: string) => {
+    const token = getToken()
+    return `/api/preview/p/${encodeURIComponent(id)}/?token=${encodeURIComponent(token || '')}`
+  },
+}
+
 export const vision = (imageData: string, mode?: 'describe' | 'build', prompt?: string) =>
   http('/api/vision', {
     method: 'POST',

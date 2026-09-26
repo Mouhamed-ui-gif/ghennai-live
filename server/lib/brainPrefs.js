@@ -14,6 +14,7 @@ const DEFAULTS = {
   team: true,
   solo: true,
   pipeline: false,
+  agentMode: 'assisted',
   models: { Core: '', Coding: '', Research: '', Study: '', Design: '', Genie: '', Voice: '' },
 }
 

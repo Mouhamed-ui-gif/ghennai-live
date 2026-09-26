@@ -1,11 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { motion, useScroll, useTransform } from 'framer-motion'
 import {
   Brain,
   Code2,
-  Globe,
-  BookOpen,
-  Palette,
   Rocket,
   Eye,
   Mic,
@@ -20,12 +17,15 @@ import {
 } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { AGENTS } from '../config/agents'
-import { useEditable, pickEditable, type EditableContent } from '../siteContent'
-import { AuthModal } from '../components/auth/AuthModal'
+import { useEditable, pickEditable } from '../siteContent'
 import { Logo } from '../components/common/Logo'
-import { ParticlesBg } from '../components/common/ParticlesBg'
-import { UniverseBg } from '../components/common/UniverseBg'
 import { TiltCard, TypingText } from '../components/common/Fx'
+
+// الخلفيات الثقيلة (tsparticles + شرائح الصور) تُحمَّل كسولًا بعد أول رسم —
+// الدخول يبقى خفيفًا وسريعًا حتى على الشبكات البطيئة.
+const ParticlesBg = lazy(() => import('../components/common/ParticlesBg').then((m) => ({ default: m.ParticlesBg })))
+const UniverseBg = lazy(() => import('../components/common/UniverseBg').then((m) => ({ default: m.UniverseBg })))
+const AuthModal = lazy(() => import('../components/auth/AuthModal').then((m) => ({ default: m.AuthModal })))
 
 function Nav() {
   const { t, lang, toggle } = useI18n()
@@ -101,7 +101,7 @@ function Nav() {
           </div>
         )}
       </header>
-      <AuthModal open={!!open} initial={open ?? 'login'} onClose={() => setOpen(null)} />
+      <Suspense fallback={null}><AuthModal open={!!open} initial={open ?? 'login'} onClose={() => setOpen(null)} /></Suspense>
     </>
   )
 }
@@ -126,7 +126,7 @@ function Hero() {
       ]
   return (
     <section id="top" ref={ref} className="relative flex min-h-screen items-center overflow-hidden pt-20">
-      <ParticlesBg density={120} />
+      <Suspense fallback={null}><ParticlesBg density={120} /></Suspense>
       <motion.div style={{ y: yText, opacity }} className="relative z-10 mx-auto grid max-w-7xl gap-12 px-4 sm:px-6 lg:grid-cols-2 lg:items-center">
         <div className="text-center lg:text-start">
           <motion.span
@@ -196,7 +196,7 @@ function Hero() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5 }}
           style={{ y: yVisual }}
-          className="relative hidden lg:block"
+          className="hero-3d-stage relative hidden lg:block"
         >
           <div className="cube-scene absolute -end-10 top-8 opacity-80">
             <div className="cube">
@@ -208,7 +208,10 @@ function Hero() {
               <span className="cube-face cube-face-bottom" />
             </div>
           </div>
-          <div className="glass-strong animate-float shine relative overflow-hidden rounded-3xl p-5 shadow-2xl">
+          {/* توهج خلفي ثلاثي الأبعاد */}
+          <div className="hero-3d-layer-back absolute inset-6 rounded-[2rem] bg-gradient-to-br from-cyan-500/25 via-violet-500/20 to-fuchsia-500/15 blur-2xl" aria-hidden />
+          <div className="hero-3d-main glass-3d orb-float shine relative overflow-hidden rounded-3xl p-5">
+            <div className="hero-3d-layer">
             <div className="mb-3 flex items-center gap-2 text-xs text-slate-400">
               <span className="h-2.5 w-2.5 rounded-full bg-rose-500" />
               <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
@@ -232,7 +235,7 @@ function Hero() {
             <div className="flex gap-2">
               <div className="flex-1 rounded-xl bg-white/5 p-3">
                 <p className="text-xs text-slate-400">Live Preview</p>
-                <div className="mt-2 h-24 rounded-lg bg-gradient-to-br from-cyan-500/30 to-violet-500/30" />
+                <div className="mt-2 h-24 rounded-lg bg-gradient-to-br from-cyan-500/30 via-violet-500/40 to-fuchsia-500/30 shadow-[0_0_30px_rgba(139,92,246,.35)]" />
               </div>
               <div className="flex-1 rounded-xl bg-white/5 p-3">
                 <p className="text-xs text-slate-400">editor.tsx</p>
@@ -244,16 +247,17 @@ function Hero() {
                 </div>
               </div>
             </div>
+            </div>
           </div>
-          <div className="absolute -start-8 -top-6 animate-float rounded-2xl glass p-3 text-sm shadow-xl [animation-delay:1.2s]">
+          <div className="hero-3d-layer absolute -start-8 -top-6 animate-float rounded-2xl glass-3d p-3 text-sm shadow-xl [animation-delay:1.2s]">
             <span className="text-rose-400">🎤</span> يقول المستخدم: «ابنِ لي موقع عن القهوة»
           </div>
-          <div className="absolute -bottom-6 -end-4 animate-float rounded-2xl glass p-3 text-sm shadow-xl [animation-delay:2.1s]">
+          <div className="hero-3d-layer absolute -bottom-6 -end-4 animate-float rounded-2xl glass-3d p-3 text-sm shadow-xl [animation-delay:2.1s]">
             <span className="text-emerald-400">🚀</span> نشرت الموقع → {t('arena.visit')}
           </div>
         </motion.div>
       </motion.div>
-      <AuthModal open={auth} initial="signup" onClose={() => setAuth(false)} />
+      <Suspense fallback={null}><AuthModal open={auth} initial="signup" onClose={() => setAuth(false)} /></Suspense>
     </section>
   )
 }
@@ -281,7 +285,7 @@ function Features() {
     cards ? { title: cards[i].title, desc: cards[i].desc } : { title: t(fallbackTitle as never), desc: t(fallbackDesc as never) }
   return (
     <section id="features" className="relative mx-auto max-w-7xl px-4 py-28 sm:px-6">
-      <ParticlesBg density={40} />
+      <Suspense fallback={null}><ParticlesBg density={40} /></Suspense>
       <div className="text-center">
         <span className="chip mb-5">{pickEditable(lang, fe?.eyebrowAr, fe?.eyebrowEn, t('features.eyebrow'))}</span>
         <h2 className="text-3xl font-extrabold sm:text-5xl">
@@ -347,7 +351,7 @@ function AgentsShowcase() {
   })
   return (
     <section id="agents" className="relative py-28">
-      <ParticlesBg density={45} />
+      <Suspense fallback={null}><ParticlesBg density={45} /></Suspense>
       <div className="mx-auto max-w-7xl px-4 sm:px-6">
         <div className="text-center">
           <span className="chip mb-5 !border-violet-400/30 !bg-violet-400/10 !text-violet-300">{pickEditable(lang, as?.eyebrowAr, as?.eyebrowEn, t('agents.show.eyebrow'))}</span>
@@ -411,7 +415,7 @@ function AgentsShowcase() {
           </button>
         </div>
       </div>
-      <AuthModal open={auth} initial="signup" onClose={() => setAuth(false)} />
+      <Suspense fallback={null}><AuthModal open={auth} initial="signup" onClose={() => setAuth(false)} /></Suspense>
     </section>
   )
 }
@@ -494,7 +498,7 @@ function Download() {
   ]
   return (
     <section id="download" className="relative py-28">
-      <ParticlesBg density={35} />
+      <Suspense fallback={null}><ParticlesBg density={35} /></Suspense>
       <div className="mx-auto max-w-5xl px-4 text-center sm:px-6">
         <span className="chip mb-5">{pickEditable(lang, dl?.eyebrowAr, dl?.eyebrowEn, t('download.eyebrow'))}</span>
         <h2 className="text-3xl font-extrabold sm:text-5xl">
@@ -552,11 +556,9 @@ function Footer() {
 }
 
 export function Landing() {
-  const { t } = useI18n()
-  void t
   return (
     <div className="relative min-h-screen">
-      <UniverseBg />
+      <Suspense fallback={null}><UniverseBg /></Suspense>
       <Nav />
       <Hero />
       <Features />

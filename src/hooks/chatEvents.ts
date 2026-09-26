@@ -29,9 +29,18 @@ export function handleChatEvent(e: SSEvent): void {
       const st = useApp.getState()
       const editing = ev.mode === 'edit' || ev.mode === 'propose'
       st.setEditPend(null)
-      st.enterCodingMode(ev.project || 'الموقع الجديد', editing ? 'edit' : 'build', ev.request || '')
+      // الاستوديو الجديد هو الواجهة الموحدة: لا تفتح CodingMode فوقه
+      // ولوح الكود الحي بجانب المحادثة يغني عن غطاء ملء الشاشة أثناء البناء
+      if (!st.studioIDEOpen && !st.railOpen) {
+        st.enterCodingMode(ev.project || 'الموقع الجديد', editing ? 'edit' : 'build', ev.request || '')
+      }
       if (ev.mode === 'build' && ev.live) st.setCodingLive(ev.live)
       st.setCodingProjectFolder(ev.root || null)
+      // افتح لوح الكود الحي بجانب المحادثة لحظيًا
+      st.resetLive()
+      st.setRailSession(true)
+      st.setRailDone(false)
+      st.setRailOpen(true)
       st.pushCodeAction({ kind: 'notice', text: editing ? `✂️ ${ev.request?.slice(0, 140) || 'تعديل عنصر'}` : `⏺ بدء بناء «${ev.project}»` })
       if (editing && ev.element) st.setEditTarget(ev.element as { tag: string; id: string; className: string; text: string; href?: string | null; src?: string | null })
       st.pushActivity({ agent: 'Coding', message: editing ? (ev.mode === 'propose' ? '📋 يحضّر مقترح التعديل…' : '✂️ تعديل عنصر محدد') : `⏺ يبدأ بناء «${ev.project}»`, status: 'running' })
@@ -102,6 +111,11 @@ export function handleChatEvent(e: SSEvent): void {
       st.setDeployState('done', abs(ev.url), null)
       if (ev.url && st.codingOpen) st.pushCodeAction({ kind: 'ok', text: `رابطك الفوري جاهز: ${abs(ev.url)}` })
       if (ev.url) st.pushToast({ kind: 'success', title: 'موقعك أصبح حيًا! 🚀', message: abs(ev.url) || '' })
+      // بطاقة الرابط داخل المحادثة نفسها — لا تضيع في التنبيهات
+      if (ev.url) {
+        const full = abs(ev.url) || ev.url
+        st.addAssistantMsg(`🚀 **موقعك حي الآن!**\n[افتح موقعك المباشر 🚀](${full})\n${full}`, 'Coding')
+      }
       void st.refreshProjects()
       break
     }
@@ -144,6 +158,11 @@ export function handleChatEvent(e: SSEvent): void {
           const t = (ev.message as string) || ''
           if (t.startsWith('▶️')) st.pushCodeAction({ kind: 'cmd', text: t.replace('▶️ ', '').replace(/^\$ /, '') })
           if (t.startsWith('✅')) st.pushCodeAction({ kind: 'ok', text: t.replace('✅ ', '') })
+          if (t.startsWith('⛔') || t.startsWith('❌')) {
+            st.pushCodeAction({ kind: 'err', text: t.replace(/^[⛔❌]\s*/, '') })
+            st.setTermOpen(true)
+            st.pushTerm({ kind: 'err', text: t.replace(/^[⛔❌]\s*/, '') + '\n' })
+          }
         }
       }
       if (ev.agent === 'Coding' && ev.tool && (ev.message || '').startsWith('▶️')) {
@@ -183,6 +202,7 @@ export function handleChatEvent(e: SSEvent): void {
       const ev = e as unknown as { built?: boolean }
       const st = useApp.getState()
       st.setCodingDone(!!ev.built)
+      st.setRailDone(true)
       st.setBuilt(!!ev.built)
       st.pushCodeAction({ kind: 'ok', text: ev.built ? 'اكتمل البناء ✓' : 'انتهت المهمة ✓' })
       st.pushActivity({ agent: 'Coding', message: ev.built ? '✅ اكتمل البناء ونُنشر عند الطلب' : '✅ انتهت المهمة', status: 'success' })
@@ -198,6 +218,95 @@ export function handleChatEvent(e: SSEvent): void {
     case 'stream_chunk': {
       const ev = e as unknown as { content?: string }
       if (ev.content) useApp.getState().addStreamChunk(ev.content)
+      break
+    }
+    case 'agent_state': {
+      const ev = e as unknown as { state?: string; reason?: string; label?: string }
+      const st = useApp.getState()
+      if (ev.state) {
+        st.setAgentState(ev.state)
+        const labels: Record<string, string> = {
+          PLANNING: '🧠 يخطط…',
+          WAITING_APPROVAL: '⏸️ ينتظر موافقتك…',
+          EXECUTING: '⚙️ ينفّذ…',
+          BUILDING: '🏗️ يبني…',
+          TESTING: '🧪 يختبر…',
+          FIXING: '🔧 يُصلح…',
+          READY: '✅ جاهز',
+          FAILED: '❌ فشل',
+          STOPPED: '⏹️ متوقف',
+          IDLE: '',
+        }
+        const msg = labels[ev.state]
+        if (msg) st.pushActivity({ agent: 'Core', message: ev.reason ? `${msg} — ${ev.reason}` : msg, status: ev.state === 'FAILED' ? 'error' : ev.state === 'STOPPED' ? 'info' : 'running' })
+      }
+      break
+    }
+    case 'ack': {
+      // إقرار فوري: "حاضر سيدي" + فتح مسرح البناء لحظيًا قبل وصول أول توكن
+      const ev = e as unknown as { agent?: string; coding?: boolean }
+      const st = useApp.getState()
+      const who = ev.agent || 'Ghennai'
+      st.pushActivity({ agent: who, message: '🫡 حاضر سيدي — بدأت التنفيذ فورًا', status: 'running' })
+      if (st.codingVoice) {
+        try { speakText('حاضر سيدي — بدأتُ التنفيذَ فورًا، وسترى الكودَ يُكتب أمامك', uiLang(), undefined, voiceFor('Coding')) } catch { /* الصوت اختياري */ }
+      }
+      if (ev.coding && !st.codingOpen && !st.studioIDEOpen) {
+        // لا غطاء ملء الشاشة: لوح الكود بجانب المحادثة هو المسرح
+        st.resetLive()
+        st.setRailSession(true)
+        st.setRailDone(false)
+        st.setRailOpen(true)
+      }
+      break
+    }
+    case 'approval_requested': {
+      const ev = e as unknown as { id: number; tool?: string; command?: string; cwd?: string; path?: string; reason?: string; kind?: string }
+      const st = useApp.getState()
+      if (typeof ev.id === 'number') {
+        st.upsertApproval({ id: ev.id, tool: ev.tool || 'terminal', command: ev.command ?? null, cwd: ev.cwd ?? null, path: ev.path ?? null, reason: ev.reason || '', kind: ev.kind ?? null, ts: Date.now() })
+        st.pushActivity({ agent: 'Core', message: `⏸️ يطلب موافقتك: ${(ev.command || ev.path || ev.tool || '').toString().slice(0, 80)}`, status: 'info' })
+        st.pushToast({ kind: 'info', title: 'موافقة مطلوبة ⏸️', message: (ev.reason || ev.command || '').toString().slice(0, 120) })
+      }
+      break
+    }
+    case 'approval_resolved': {
+      const ev = e as unknown as { id: number; decision?: string }
+      const st = useApp.getState()
+      if (typeof ev.id === 'number') st.removeApproval(ev.id)
+      break
+    }
+    case 'brief_questions': {
+      const st = useApp.getState()
+      st.pushActivity({ agent: 'Coding', message: '❓ أسئلة توضيح سريعة — أجب ليبدأ البناء فورًا', status: 'info' })
+      st.pushToast({ kind: 'info', title: 'سؤال سريع قبل البناء ❓', message: 'أجب باختصار وسيبدأ البناء فورًا' })
+      break
+    }
+    case 'preview_started': {
+      const ev = e as unknown as { id?: string; port?: number; command?: string; cwd?: string }
+      const st = useApp.getState()
+      if (ev.id) {
+        const tok = localStorage.getItem('ghennai_token')
+        st.setPreview(`/api/preview/p/${encodeURIComponent(ev.id)}/?token=${encodeURIComponent(tok || '')}`)
+        st.pushCodeAction({ kind: 'ok', text: `👁️ معاينة حية نشطة :${ev.port ?? ''} — ${ev.command || ''}` })
+        st.pushActivity({ agent: 'Preview', message: `👁️ خادم المعاينة يعمل :${ev.port ?? ''}`, status: 'success' })
+        st.pushToast({ kind: 'success', title: 'المعاينة الحية تعمل 👁️', message: `المنفذ ${ev.port ?? ''}` })
+      }
+      break
+    }
+    case 'preview_stopped': {
+      const ev = e as unknown as { id?: string; reason?: string; code?: number }
+      const st = useApp.getState()
+      st.pushCodeAction({ kind: 'info', text: `⏹️ توقفت المعاينة — ${ev.reason || ''}` })
+      st.pushActivity({ agent: 'Preview', message: `⏹️ توقفت المعاينة — ${ev.reason || ''}`, status: 'info' })
+      break
+    }
+    case 'preview_log': {
+      const ev = e as unknown as { kind?: string; text?: string }
+      const st = useApp.getState()
+      const kind = ev.kind === 'err' ? 'err' : ev.kind === 'cmd' ? 'cmd' : 'out'
+      st.setTermOpen(true)
+      st.pushTerm({ kind, text: String(ev.text || '') })
       break
     }
     case 'answer': {

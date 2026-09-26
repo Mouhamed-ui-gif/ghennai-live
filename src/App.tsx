@@ -1,10 +1,11 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { Landing } from './pages/Landing'
 import { useApp } from './store/app'
 import { rearmEvents } from './api/events'
 import { Logo } from './components/common/Logo'
 import { Toaster } from './components/common/Toaster'
+import { ErrorBoundary } from './components/common/ErrorBoundary'
 
 const Dashboard = lazy(() => import('./pages/Dashboard').then((m) => ({ default: m.Dashboard })))
 
@@ -30,7 +31,6 @@ function Protected({ children }: { children: React.ReactNode }) {
 export function App() {
   const token = useApp((s) => s.token)
   const booting = useApp((s) => s.booting)
-  const [ready, setReady] = useState(false)
 
   useEffect(() => {
     rearmEvents()
@@ -43,6 +43,7 @@ export function App() {
   if (booting) return <Splash />
 
   return (
+    <ErrorBoundary>
     <Suspense
       fallback={
         <div className="flex min-h-screen items-center justify-center bg-night-950">
@@ -64,5 +65,6 @@ export function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
+    </ErrorBoundary>
   )
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { RotateCcw, Sparkles, Loader2, ExternalLink, Monitor, Tablet, Smartphone } from 'lucide-react'
 import { useApp } from '../../store/app'
 import { workspace } from '../../api/client'
@@ -59,7 +59,7 @@ export function PreviewPane() {
   const [status, setStatus] = useState('…')
   const blobsRef = useRef<string[]>([])
 
-  const build = async () => {
+  const build = useCallback(async () => {
     setLoading(true)
     let newBlobs: string[] = []
     try {
@@ -107,13 +107,12 @@ export function PreviewPane() {
       blobsRef.current.forEach((u) => URL.revokeObjectURL(u))
       blobsRef.current = newBlobs
     }
-  }
+  }, [])
 
   useEffect(() => {
     const id = setTimeout(build, 250)
     return () => clearTimeout(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [variant, activeFile])
+  }, [variant, activeFile, build])
 
   return (
     <div className="flex h-full flex-col bg-night-950/50">

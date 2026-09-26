@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 
-export function TiltCard({ children, className = '', max = 10 }: { children: React.ReactNode; className?: string; max?: number }) {
+export function TiltCard({ children, className = '', max = 12 }: { children: React.ReactNode; className?: string; max?: number }) {
   const ref = useRef<HTMLDivElement>(null)
   const [style, setStyle] = useState<React.CSSProperties>({})
+  const [glare, setGlare] = useState({ x: 50, y: 0, o: 0 })
 
   const onMove = (e: MouseEvent<HTMLDivElement>) => {
     const el = ref.current
@@ -12,10 +13,14 @@ export function TiltCard({ children, className = '', max = 10 }: { children: Rea
     const px = (e.clientX - rect.left) / rect.width - 0.5
     const py = (e.clientY - rect.top) / rect.height - 0.5
     setStyle({
-      transform: `rotateX(${-py * max}deg) rotateY(${px * max}deg) translateZ(10px)`,
+      transform: `perspective(1000px) rotateX(${(-py * max).toFixed(2)}deg) rotateY(${(px * max).toFixed(2)}deg) translateZ(12px) scale3d(1.02,1.02,1)`,
     })
+    setGlare({ x: (px + 0.5) * 100, y: (py + 0.5) * 100, o: 1 })
   }
-  const onLeave = () => setStyle({ transform: 'rotateX(0) rotateY(0)' })
+  const onLeave = () => {
+    setStyle({ transform: 'perspective(1000px) rotateX(0deg) rotateY(0deg) translateZ(0)' })
+    setGlare((g) => ({ ...g, o: 0 }))
+  }
 
   useEffect(() => {
     const el = ref.current
@@ -31,13 +36,20 @@ export function TiltCard({ children, className = '', max = 10 }: { children: Rea
   }, [])
 
   return (
-    <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className={className} style={{ transformStyle: 'preserve-3d', ...style, perspective: 900 }}>
+    <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className={`tilt-3d relative ${className}`} style={{ ...style }}>
       {children}
+      <div
+        className="pointer-events-none absolute inset-0 rounded-3xl transition-opacity duration-300"
+        style={{
+          opacity: glare.o,
+          background: `radial-gradient(480px circle at ${glare.x}% ${glare.y}%, rgba(255,255,255,.14), transparent 55%)`,
+        }}
+      />
     </div>
   )
 }
 
-export function TypingText({ texts, className = '', speed = 55, bold = true }: { texts: string[]; className?: string; speed?: number; bold?: boolean }) {
+export function TypingText({ texts, className = '', speed = 55 }: { texts: string[]; className?: string; speed?: number; bold?: boolean }) {
   const [i, setI] = useState(0)
   const [len, setLen] = useState(0)
   const [phase, setPhase] = useState<'type' | 'hold' | 'erase'>('type')
@@ -65,7 +77,6 @@ export function TypingText({ texts, className = '', speed = 55, bold = true }: {
   }, [phase, len, i, texts, speed])
 
   const full = texts[i] || ''
-  const shown = bold ? '<mark style="all:unset;mso">' : ''
   return (
     <span className={className} dir="auto">
       {full.slice(0, len)}

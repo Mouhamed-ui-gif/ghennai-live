@@ -5,7 +5,6 @@ import { workspace } from '../api/client'
 import { initVoiceTts } from '../components/dashboard/voice'
 import { Sidebar } from '../components/dashboard/Sidebar'
 import { ChatPanel } from '../components/dashboard/ChatPanel'
-import { ActivityFeed } from '../components/dashboard/ActivityFeed'
 import { WorldBackground } from '../components/dashboard/WorldBackground'
 import { Logo } from '../components/common/Logo'
 import { rearmEvents } from '../api/events'
@@ -13,6 +12,7 @@ import { initLive, closeLive } from '../api/live'
 import { AGENT_MAP } from '../config/agents'
 import { StarDust } from '../components/common/StarDust'
 import { StatusBar } from '../components/dashboard/StatusBar'
+import { ApprovalDialog } from '../components/dashboard/ApprovalDialog'
 import { Menu, LogOut, Loader2 } from 'lucide-react'
 
 const ArenaWorkbench = lazy(() => import('../components/arena/ArenaWorkbench').then((m) => ({ default: m.ArenaWorkbench })))
@@ -20,6 +20,8 @@ const BrainPanel = lazy(() => import('../components/dashboard/BrainPanel').then(
 const SessionsPanel = lazy(() => import('../components/dashboard/SessionsPanel').then((m) => ({ default: m.SessionsPanel })))
 const CodingMode = lazy(() => import('../components/coding/CodingMode').then((m) => ({ default: m.CodingMode })))
 const BuildStudio = lazy(() => import('../components/coding/BuildStudio').then((m) => ({ default: m.BuildStudio })))
+const StudioIDE = lazy(() => import('../components/studio/StudioIDE').then((m) => ({ default: m.StudioIDE })))
+const CodeRail = lazy(() => import('../components/dashboard/CodeRail').then((m) => ({ default: m.CodeRail })))
 
 function useIsDesktop() {
   const [d, setD] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width:1024px)').matches)
@@ -48,7 +50,10 @@ export function Dashboard() {
   const agent = useApp((s) => s.agent)
   const zen = useApp((s) => s.zen)
   const codingOpen = useApp((s) => s.codingOpen)
+  const railOpen = useApp((s) => s.railOpen)
+  const railSession = useApp((s) => s.railSession)
   const studioOpen = useApp((s) => s.studioOpen)
+  const studioIDEOpen = useApp((s) => s.studioIDEOpen)
   const isDesktop = useIsDesktop()
   const [sideOpen, setSideOpen] = useState(false)
   const mounted = useRef(false)
@@ -62,9 +67,20 @@ export function Dashboard() {
       .then((d) => useApp.getState().setFiles((d as { tree: never }).tree))
       .catch(() => undefined)
     useApp.getState().restoreMsgs()
+    // تحميل مسبق لأثقل الوحدات في وقت الخمول: فتح مسرح البناء يصبح لحظيًا
+    const preload = () => {
+      void import('../components/coding/CodingMode').catch(() => undefined)
+      void import('../components/studio/StudioIDE').catch(() => undefined)
+      void import('@monaco-editor/react').catch(() => undefined)
+    }
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback
+    let t: ReturnType<typeof setTimeout> | undefined
+    if (ric) ric(preload, { timeout: 8000 })
+    else t = setTimeout(preload, 4000)
     mounted.current = true
     return () => {
       closeLive()
+      if (t) clearTimeout(t)
     }
   }, [])
 
@@ -73,7 +89,8 @@ export function Dashboard() {
       const mod = e.metaKey || e.ctrlKey
       if (!mod) {
         if (e.key === 'Escape') {
-          if (useApp.getState().codingOpen) useApp.getState().exitCodingMode()
+          if (useApp.getState().studioIDEOpen) useApp.getState().closeStudioIDE()
+          else if (useApp.getState().codingOpen) useApp.getState().exitCodingMode()
           else if (useApp.getState().studioOpen) useApp.getState().closeStudio()
           else if (zen) useApp.getState().setZen(false)
         }
@@ -109,12 +126,10 @@ export function Dashboard() {
   ) : sessionsOpen ? (
     <SessionsPanel onClose={() => useApp.getState().setSessionsOpen(false)} />
   ) : (
-    <aside className="flex h-full min-h-0 flex-col border-s border-white/5 p-3">
-      <ActivityFeed />
-      <p className="mt-2 flex items-center gap-2 px-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-        <span className="inline-block h-2 w-2 rounded-full" style={{ background: world.glow }} />
-        <span style={{ color: AGENT_MAP[agent].color }}>{agent}</span> · {world.symbol}
-      </p>
+    <aside className="flex h-full min-h-0 flex-col items-center justify-center gap-2 border-s border-white/5 p-3 text-center">
+      <span className="inline-block h-2 w-2 rounded-full" style={{ background: world.glow }} />
+      <p className="text-[11px] font-semibold" style={{ color: AGENT_MAP[agent].color }}>{agent}</p>
+      <p className="text-[10px] text-slate-500">{world.symbol}</p>
     </aside>
   )
 
@@ -122,6 +137,7 @@ export function Dashboard() {
     <div className="bg-animated relative flex h-screen w-full overflow-hidden">
       <WorldBackground agent={agent} />
       <StarDust color={AGENT_MAP[agent].color} density={14} />
+      <ApprovalDialog />
 
       {codingOpen && (
         <Suspense fallback={<Fallback />}>
@@ -131,6 +147,11 @@ export function Dashboard() {
       {studioOpen && (
         <Suspense fallback={<Fallback />}>
           <BuildStudio />
+        </Suspense>
+      )}
+      {studioIDEOpen && (
+        <Suspense fallback={<Fallback />}>
+          <StudioIDE />
         </Suspense>
       )}
 
@@ -174,6 +195,18 @@ export function Dashboard() {
                 <Panel id="right" minSize={28} defaultSize={45}>
                   <div className="h-full min-h-0 overflow-hidden lg:block">
                     <Suspense fallback={<Fallback />}>{rightSlot}</Suspense>
+                  </div>
+                </Panel>
+              </>
+            )}
+            {rightVisible && railSession && railOpen && (
+              <>
+                <Separator className="w-1.5 bg-white/5 transition-colors hover:bg-cyan-400/40" />
+                <Panel id="coderail" minSize={20} defaultSize={30}>
+                  <div className="h-full min-h-0 overflow-hidden rounded-xl border border-cyan-400/20 lg:block">
+                    <Suspense fallback={<Fallback />}>
+                      <CodeRail />
+                    </Suspense>
                   </div>
                 </Panel>
               </>

@@ -1,4 +1,7 @@
 import { ensureProject, setProjectMeta, shareCodeInUse, findByShareCode } from './projects.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // أحرف لا لبس فيها (بلا i/l/o/0/1) لرابطة أقصر وأسهل قراءة
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
@@ -29,4 +32,26 @@ export function shareRoot(code) {
   return findByShareCode(code)
 }
 
-export const shareCodeValid = (code) => /^[a-z0-9]{6,12}$/.test(String(code || ''))
+export const shareCodeValid = (code) => /^[a-z0-9]{6,12}$/i.test(String(code || ''))
+
+const __dir = path.dirname(fileURLToPath(import.meta.url))
+
+/** القاعدة العامة للروابط: PUBLIC_URL ← رابط التونل الحي ← '' (نسبي) */
+export function publicBase() {
+  const env = String(process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '')
+  if (env) return env
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(__dir, '..', 'data', 'tunnel.json'), 'utf8'))
+    const u = String(j?.url || '').trim().replace(/\/+$/, '')
+    if (/^https?:\/\//i.test(u)) return u
+  } catch { /* لا تونل — نسبي */ }
+  return ''
+}
+
+/** رابط عام كامل من مسار نسبي (/live/xxxx/ → https://…/live/xxxx/ أو يبقى نسبيًا) */
+export function publicUrl(rel) {
+  const r = String(rel || '')
+  const b = publicBase()
+  if (!b) return r
+  return r.startsWith('/') ? `${b}${r}` : `${b}/${r}`
+}

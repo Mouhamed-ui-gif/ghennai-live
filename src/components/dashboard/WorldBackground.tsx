@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useMemo } from 'react'
 import { AGENT_MAP, type AgentId } from '../../config/agents'
 import { StreamBg } from '../common/StreamBg'
 
@@ -15,7 +15,7 @@ export function useWorldCss(agent: AgentId): React.CSSProperties {
       '--w-glow': w.glow,
       '--w-grid': w.grid,
     } as React.CSSProperties
-  }, [agent])
+  }, [w.ambience, w.glow, w.grid])
 }
 
 export function WorldBackground({ agent }: { agent: AgentId }) {
@@ -32,7 +32,7 @@ export function WorldBackground({ agent }: { agent: AgentId }) {
         delay: -Math.random() * 30,
         drift: (Math.random() - 0.5) * 40,
       })),
-    [agent]
+    [w.symbols]
   )
   const dots = useMemo(
     () =>
@@ -45,7 +45,7 @@ export function WorldBackground({ agent }: { agent: AgentId }) {
         delay: -Math.random() * 12,
         color: w.particle[i % w.particle.length],
       })),
-    [agent]
+    [w.particle]
   )
 
   return (

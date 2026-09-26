@@ -22,6 +22,12 @@ function markBlockedOnQuota(name, res) {
 
 /** كل موفّر سحابي بمفتاحه ونموذجه؛ وOpenAI-format تُدعم الأدوات function/tool_calls */
 const PROVIDERS = {
+  // منصة Kimi K3 المحلية (مجانية، بلا مفتاح — OpenAI-compatible على 127.0.0.1:8899).
+  // tools:false عمدًا: منصة وكيلة تنفّذ بنفسها وترد نصًا — لا تصلح لحلقة tool_calls،
+  // لكنها ممتازة للدردشة (مُتحقق: رد صحيح في ~3 ثوانٍ).
+  kimiLocal: { key: 'local', base: process.env.KIMI_LOCAL_URL || 'http://127.0.0.1:8899/v1', model: process.env.KIMI_LOCAL_MODEL || 'kimi-k3-agent', tools: false },
+  // Moonshot المباشر (kimi-k3) — يُفعَّل تلقائيًا لحظة وضع KIMI_API_KEY (مستبعد بدونه، بلا ادعاء).
+  moonshot: { key: process.env.KIMI_API_KEY || '', base: 'https://api.moonshot.ai/v1', model: process.env.KIMI_MODEL || 'kimi-k3', tools: true },
   gemini: { key: process.env.GEMINI_API_KEY || '', model: process.env.GEMINI_MODEL || 'gemini-2.0-flash', tools: true },
   openai: { key: process.env.OPENAI_API_KEY || '', base: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', tools: true },
   groq: { key: process.env.GROQ_API_KEY || '', base: 'https://api.groq.com/openai/v1', model: process.env.GROQ_MODEL || 'llama-3.1-8b-instant', tools: true },
@@ -55,6 +61,37 @@ async function fetchJson(url, options, timeoutMs = 15000) {
 async function ollamaIsAvailable() {
   const res = await fetchJson(`${OLLAMA_URL}/api/tags`, { method: 'GET' }, 4000)
   return res.ok
+}
+
+let ollamaModelCache = null
+let ollamaModelCacheAt = 0
+
+/**
+ * اختيار نموذج Ollama موجود فعلًا: المفضل → الاحتياطي → أول نموذج محلي.
+ * يمنع موت السلسلة كاملة بخطأ 404 عندما يُحذف النموذج المُعدّ (حدث حقيقي:
+ * qwen2.5:3b اختفى وبقي qwen2.5:1.5b فقط). الكاش 60 ثانية.
+ */
+export async function resolveOllamaModel(preferred = null) {
+  const want = preferred || OLLAMA_MODEL
+  const now = Date.now()
+  if (!ollamaModelCache || now - ollamaModelCacheAt > 60000) {
+    try {
+      const res = await fetchJson(`${OLLAMA_URL}/api/tags`, { method: 'GET' }, 4000)
+      const names = (res.json?.models || []).map((m) => m.name || m.model).filter(Boolean)
+      ollamaModelCache = names
+      ollamaModelCacheAt = now
+    } catch {
+      ollamaModelCache = []
+      ollamaModelCacheAt = now
+    }
+  }
+  const names = ollamaModelCache
+  if (names.includes(want)) return want
+  if (names.includes(OLLAMA_FALLBACK)) return OLLAMA_FALLBACK
+  const base = (s) => String(s).split(':')[0]
+  const sameFamily = names.find((n) => base(n) === base(want))
+  if (sameFamily) return sameFamily
+  return names[0] || null
 }
 
 /** قائمة بترتيب أولوية المزوّدات عند استدعاء الأدوات (موثوقية استدعاء الأدوات قبل السرعة) */
@@ -287,6 +324,8 @@ async function raceCloud(options, messages) {
 
 async function generateOllama(options) {
   const { messages = [], prompt, tools, model, raw = false, keepAlive = '30m', think = true, numCtx = 8192 } = options
+  const resolvedModel = await resolveOllamaModel(model || null)
+  if (!resolvedModel) throw new Error('Ollama: no local models installed (ollama list is empty)')
   const chat = []
   if (options.system) chat.push({ role: 'system', content: options.system })
   for (const m of messages) {
@@ -296,7 +335,7 @@ async function generateOllama(options) {
   if (prompt) chat.push({ role: 'user', content: prompt })
 
   const payload = {
-    model: model || OLLAMA_MODEL,
+    model: resolvedModel,
     messages: chat,
     stream: false,
     keep_alive: keepAlive,
@@ -561,8 +600,10 @@ async function streamCloud(name, p, options, messages, onToken, signal) {
 
 async function streamOllama(options, messages, onToken, onDone) {
   const { model, tools, think = false, numCtx = 4096 } = options
+  const useModel = await resolveOllamaModel(model || null)
+  if (!useModel) throw new Error('Ollama: no local models installed (ollama list is empty)')
   const chat = messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '') }))
-  const payload = { model: model || OLLAMA_MODEL, messages: chat, stream: true, think: think === false ? false : true, keep_alive: '30m', options: { num_ctx: numCtx } }
+  const payload = { model: useModel, messages: chat, stream: true, think: think === false ? false : true, keep_alive: '30m', options: { num_ctx: numCtx } }
   if (tools && tools.length) payload.tools = tools
   let full = ''
   let gotDelta = false
@@ -624,8 +665,15 @@ function parseResetMs(v) {
 }
 
 async function* readNdjsonLines(url, options, signal, quietMs) {
+  // المهلة هنا خمول (idle) تُصفَّر مع كل قطعة مستلمة — لا إجماليًا.
+  // (كانت خطأً إجماليةً: قتلت أي turn محلي يتجاوز 25 ثانية → "This operation was aborted")
+  const limit = quietMs || CLOUD_TIMEOUT_MS * 2
   const controller = new AbortController()
-  const t = setTimeout(() => controller.abort(), quietMs || CLOUD_TIMEOUT_MS * 2)
+  let t = setTimeout(() => controller.abort(), limit)
+  const poke = () => {
+    clearTimeout(t)
+    t = setTimeout(() => controller.abort(), limit)
+  }
   const onExt = () => controller.abort()
   if (signal) {
     if (signal.aborted) controller.abort()
@@ -659,6 +707,7 @@ async function* readNdjsonLines(url, options, signal, quietMs) {
         break
       }
       if (chunk.done) break
+      poke()
       buf += decoder.decode(chunk.value, { stream: true })
       let nl = buf.indexOf('\n')
       while (nl !== -1) {
@@ -826,14 +875,15 @@ async function* streamOpenAICompatToolsGen(name, p, options, messages, tracker) 
 
 /** بث Ollama مع جمع tool_calls (وسائط الأدوات تصل كاملة في النهاية) */
 async function* streamOllamaToolsGen(options, messages) {
-  const model = options.model || OLLAMA_MODEL
+  const model = await resolveOllamaModel(options.model || null)
+  if (!model) throw new Error('Ollama: no local models installed (ollama list is empty)')
   const chat = messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '') }))
   const payload = { model, messages: chat, stream: true, keep_alive: '30m', options: { num_ctx: options.numCtx || 8192 } }
   if (options.tools?.length) payload.tools = options.tools
   let full = ''
   let toolCalls = null
   let saw = false
-  for await (const line of readNdjsonLines(`${OLLAMA_URL}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, options.signal || null, 25000)) {
+  for await (const line of readNdjsonLines(`${OLLAMA_URL}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, options.signal || null, 180000)) {
     if (options.signal?.aborted) throw new Error('aborted')
     let j
     try { j = JSON.parse(line) } catch { continue }

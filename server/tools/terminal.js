@@ -7,7 +7,7 @@ const DANGEROUS = [
   /rm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|[a-zA-Z]*f[a-zA-Z]*r?)\s+[-/]/,
   /\bmkfs\b/, /:\s*rm\s+-rf\s*\/\s*$/,
   /\bdd\s+if=/,
-  /\bshutdown\b/, /\breboot\b/, /\bpoweroff\b/, /\bhalt\b/, /\binit\b/,
+  /\bshutdown\b/, /\breboot\b/, /\bpoweroff\b/, /\bhalt\b/,
   />\s*\/dev\/sd/,
   /\bchown\b.*\s+(\/|\/home\/?)\s*$/,
   /(\/proc\/|sysctl\s+-w).*?/,
@@ -46,6 +46,7 @@ const BLOCKED = new Set([
   'systemctl', 'service', 'mount', 'umount', 'modprobe', 'kmod', 'iptables', 'ufw',
   'ssh', 'scp', 'sftp', 'ssh-keygen', 'ssh-add', 'passwd', 'chroot', 'nsenter',
   'docker', 'podman', 'kill', 'pkill', 'killall', 'killall5', 'taskset', 'nohup',
+  'init', 'telinit', 'halt', 'poweroff', 'reboot', 'shutdown',
 ])
 
 /** متغيرات بيئة آمنة فقط (بلا مفاتيح/أسرار) */
@@ -97,8 +98,11 @@ const DEFAULT_WORKSPACE = WORKSPACE_DIR
  * options.cwd: مسار نسبي/مطلق داخل مساحة العمل
  * options.onData: (kind, chunk) => void — بث مباشر خلال التنفيذ (kind: 'out'|'err')
  */
-function run(command, { cwd = null, workspace = null, timeoutMs = 120000, env = {}, onData = null } = {}) {
+function run(command, { cwd = null, workspace = null, timeoutMs = 120000, env = {}, onData = null, signal = null } = {}) {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      return resolve({ ok: false, output: '', stderr: '⏹️ أُوقف قبل التنفيذ\n', code: -2, timedOut: false, stopped: true, cwd: null })
+    }
     const dangerous = looksDangerous(command)
     const denied = commandAllowed(command)
     let base = workspace && workspace.startsWith(path.sep) ? workspace : path.resolve(DEFAULT_WORKSPACE, workspace || '.')
@@ -154,12 +158,29 @@ function run(command, { cwd = null, workspace = null, timeoutMs = 120000, env = 
     }, timeoutMs)
 
     if (onData) onData('cmd', `${command}\n`)
+    let settled = false
+    const finish = (val) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (signal) {
+        try { signal.removeEventListener('abort', onAbort) } catch { /* noop */ }
+      }
+      resolve(val)
+    }
+    const onAbort = () => {
+      try { child.kill('SIGKILL') } catch { /* noop */ }
+      stream('err', '⏹️ أُوقف التنفيذ من المستخدم\n')
+      finish({ ok: false, output, stderr, code: -2, timedOut, stopped: true, dangerous, allowed: true, cwd: finalCwd })
+    }
+    if (signal) {
+      try { signal.addEventListener('abort', onAbort, { once: true }) } catch { /* noop */ }
+    }
     child.stdout.on('data', (d) => stream('out', d.toString()))
     child.stderr.on('data', (d) => stream('err', d.toString()))
-    child.on('error', (err) => { resolve({ ok: false, output, stderr: String(err), code: -1 }) })
+    child.on('error', (err) => { finish({ ok: false, output, stderr: String(err), code: -1 }) })
     child.on('close', (code) => {
-      clearTimeout(timer)
-      resolve({ ok: code === 0 && !timedOut, output, stderr, code, timedOut, dangerous, allowed: true, cwd: finalCwd })
+      finish({ ok: code === 0 && !timedOut, output, stderr, code, timedOut, dangerous, allowed: true, cwd: finalCwd })
     })
   })
 }

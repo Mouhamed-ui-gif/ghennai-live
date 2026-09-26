@@ -9,6 +9,7 @@ import { contextBlock } from '../lib/memory.js'
 import { agentMemory, agentMemoryBlock, rememberLastRequest } from '../lib/agentMemory.js'
 import { getPrefs, modelFor } from '../lib/brainPrefs.js'
 import { appendMsg, createSession, getSession, currentSessionId } from '../lib/sessions.js'
+import { Memory } from '../lib/db.js'
 import { projectsFor } from '../lib/projects.js'
 import { safeResolve } from '../lib/paths.js'
 import tools from '../tools/registry.js'
@@ -208,6 +209,15 @@ const ROUTER_PROMPT = `You are the GHENNAI Core router. Decide which agent shoul
 - general: chat, opinion, planning, writing, casual conversation.
 Respond with a single JSON line: {"agent":"coding"}` + IDENTITY
 
+/** تطبيع العربية لمطابقة النوايا: الهمزات→ا، ؤ→و، ئ→ي، حذف التشكيل والتطويل.
+ *  يمنع سقوط طلبات مثل «أنشئ» خارج regexes البناء (السبب الجذري للنجاح الوهمي). */
+const normAr = (s) => String(s || '')
+  .replace(/[أإآٱ]/g, 'ا')
+  .replace(/ؤ/g, 'و')
+  .replace(/ئ/g, 'ي')
+  .replace(/[\u064B-\u0652\u0670\u0640]/g, '')
+  .toLowerCase()
+
 /** توجيه سريع بدون استدعاء نموذج — يضمن ردًّا فوريًا على أي سؤال */
 function route(userMessage, requested) {
   if (requested && Object.keys(AGENT_PERSONAS).map((a) => a.toLowerCase()).includes(String(requested).toLowerCase())) {
@@ -217,7 +227,7 @@ function route(userMessage, requested) {
   if (['research', 'study', 'design', 'general', 'coding'].includes(requested)) return requested
 
   const msg = String(userMessage || '')
-  const m = msg.toLowerCase()
+  const m = normAr(msg)
   // لموقع/بناء: أولوية لأنها تحتوي كلمات تصميم غالبًا
   if (/(ابن|ابني|انشئ|إنشاء|اصنع|اعمل لي|أسوي|ايسوي|بناء|برمجة|كود|برمج|موقع|صفحة|قالب|تطبيق|لوحة تحكم|اب رمز|كودي|ايرير|هبوط|صفحة عن|مشروع|انيور|mvn|vite|react|html)/.test(m)) return 'coding'
   if (/(صمم|تصميم|الوان|ألوان|palette|color|واجهة|واجهات|ui|ux|شعار|logo|بنر|بورتفوليو|انفوجرافيك)/.test(m)) return 'design'
@@ -257,8 +267,9 @@ Respond ONLY with JSON: {"steps":[{"agent":"research","goal":"step goal"}]}` + I
 async function textAgent(email, agent, system, userMessage, toolsDef = null, extraMsgs = []) {
   const mem = contextBlock(email, userMessage)
   const sesMem = agentMemoryBlock(email, agent)
+  const vis = visionBlock(email)
   const messages = [
-    { role: 'system', content: system + mem + sesMem + IDENTITY },
+    { role: 'system', content: system + mem + sesMem + vis + IDENTITY },
     ...extraMsgs,
     { role: 'user', content: userMessage + IDENTITY_NOTE },
   ]
@@ -322,11 +333,24 @@ async function runGeneral(user, userMessage) {
 }
 
 /** ردّ مباشر بحروف متدفقة (سحابة/محلي) — أسرع ظهورًا بكثير */
+function visionBlock(email) {
+  // آخر تحليل صورة (30 دقيقة): يُحقن في كل وكيل حتى يتذكر الصورة دون إعادة رفع
+  try {
+    const rows = Memory.search({ scope: 'vision', user_email: email, limit: 1 })
+    const v = rows?.[0]?.value
+    if (!v || !v.desc || Date.now() - (v.ts || 0) > 30 * 60 * 1000) return ''
+    return `\n\n[CONTEXT — تحليل آخر صورة رفعها المستخدم — استعمله عند أي سؤال عن "الصورة/صورتك/تلك الصورة" ولا تقل إنك لم ترها]:\n${String(v.desc).slice(0, 2000)}`
+  } catch {
+    return ''
+  }
+}
+
 function textAgentStream(email, agent, system, userMessage, onToken) {
   const mem = contextBlock(email, userMessage)
   const sesMem = agentMemoryBlock(email, agent)
+  const vis = visionBlock(email)
   const messages = [
-    { role: 'system', content: system + mem + sesMem + IDENTITY },
+    { role: 'system', content: system + mem + sesMem + vis + IDENTITY },
     { role: 'user', content: userMessage + IDENTITY_NOTE },
   ]
   return new Promise((resolve, reject) => {
@@ -483,7 +507,7 @@ async function* runBuildPipeline(user, userMessage, opts = {}) {
 
 async function runTooledAgent(user, agentName, system, userMessage, toolsDef, toolImpls) {
   const messages = [
-    { role: 'system', content: system },
+    { role: 'system', content: system + contextBlock(user.email, userMessage) + agentMemoryBlock(user.email, agentName) + visionBlock(user.email) + IDENTITY },
     { role: 'user', content: `Workspace: ${userWorkspace(user.email)}\n\n${userMessage}` + IDENTITY_NOTE },
   ]
   let res
@@ -548,7 +572,7 @@ const ASK_WORDS = /(ما هو|ما هي|لماذا|ما سبب|كيف (اطلب|
 const BUILD_WORDS = /(ابن|بني|ابني|انشئ|انشاء|إنشاء|اصنع|اعمل لي|أسوي|برمجة|برمج|كود|كواد|موقع|مواقع|تطبيق|تطبيقات|صفحة ويب|لوحة تحكم|قالب|تعديل|أصلح|إصلاح|react|html|css|vite|fastapi|داجنغو)/i
 const STRONG_BUILD = /(ابن|ابني|بني|انشئ|إنشاء|اصنع|اعمل لي|أسوي|اكتب لي كود|برمج لي|عطيني كود|كود لي|موقع لي|صفحة لي|تطبيق لي|لوحة تحكم لي)/i
 function looksLikeBuild(goal) {
-  const m = String(goal || '').toLowerCase()
+  const m = normAr(goal)
   if (!BUILD_WORDS.test(m)) return false
   if (STRONG_BUILD.test(m)) return true
   return !ASK_WORDS.test(m)
@@ -581,10 +605,11 @@ const SCOPE_LABEL_EN = {
 
 /** عدّاد تطابق نصّ الرسالة مع اختصاصات الوكلاء — الأفعال أثقل من الأسماء (وزن 2) */
 function strongestDomain(message) {
+  const text = normAr(message)
   let best = null
   let bestScore = 0
   const weigh = (re, w) => {
-    const hits = (String(message).match(re) || []).length * w
+    const hits = (text.match(re) || []).length * w
     return hits
   }
   for (const [agent, re] of Object.entries(DOMAIN_STRONG)) {
@@ -612,6 +637,45 @@ function maybeDefer(agent, message) {
   }
 }
 
+/** هل طلب البناء غامض؟ (أقل من تفصيلين ملموسين: اسم/لون/أقسام/مجال/جمهور) */
+function looksVague(goal) {
+  const m = normAr(goal)
+  if (m.length > 220) return false
+  let details = 0
+  if (/["'“”«»]/.test(String(goal))) details++
+  if (/(لون|الوان|ازرق|احمر|اخضر|اصفر|برتقالي|بنفسجي|وردي|ذهبي|فضي|داكن|فاتح|اسود|ابيض|رمادي|#[0-9a-f]{3,6})/.test(m)) details++
+  if (/(قسم|صفحة|صفحات|اسعار|تواصل|اتصل|معرض|اعمال|مدونة|رئيسية|خدمات|فريق|اراء العملاء|اسئلة شائعة|حجز|سلة|دفع)/.test(m)) details++
+  if (/(مطعم|مقهى|كافيه|متجر|محل|ملابس|شركة|عيادة|مستشفى|مدرسة|جامعة|فندق|عقارات|سيارات|مخبز|حلاق|صالون|تقنية|تطبيق|جمعية|نادي|مصور|مصمم)/.test(m)) details++
+  if (/(شباب|اطفال|رجال|نساء|اعمال|عربي|انجليزي|فرنسي)/.test(m)) details++
+  return details < 2
+}
+
+/** أسئلة توضيح معلّقة لكل مستخدم (سؤال واحد فقط — ثم بناء مهما كانت الإجابة) */
+const briefPending = new Map()
+
+const FALLBACK_BRIEF_QS = [
+  { q: 'ما النمط البصري؟', options: ['فخم داكن', 'فاتح نظيف', 'ملوّن مرح'] },
+  { q: 'ما الألوان المميزة؟', options: ['ذهبي/أسود', 'أزرق/سماوي', 'أخضر/زمردي'] },
+  { q: 'ما أهم 3 أقسام؟', options: ['البطل + المميزات + تواصل', 'معرض + أسعار + آراء', 'من نحن + خدمات + حجز'] },
+]
+
+/** توليد 3 أسئلة توضيح سريعة (نموذج سريع، مع بديل ثابت عند الفشل) */
+async function briefQuestions(user, goal) {
+  try {
+    const r = await generate({
+      system: `You are a website briefing assistant. The user gave a VAGUE website request. Ask at most 3 SHORT questions (style/mood, colors, key sections or content), each with 2-4 suggested options. Compact markdown, user's language. End with exactly: أجب باختصار وسأبني فورًا 🚀`,
+      prompt: String(goal).slice(0, 400),
+      raw: true,
+    })
+    const text = String(r.content || '').trim()
+    if (text.length > 20) return { text, questions: FALLBACK_BRIEF_QS }
+  } catch { /* fallback below */ }
+  return {
+    text: `قبل البناء، 3 أسئلة سريعة لأصمم لك موقعًا أسطوريًا 🎯\n\n1. **النمط البصري؟** (فخم داكن / فاتح نظيف / ملوّن مرح)\n2. **الألوان المميزة؟** (ذهبي/أسود، أزرق/سماوي، أخضر/زمردي…)\n3. **أهم 3 أقسام؟** (البطل + المميزات + تواصل، معرض + أسعار + آراء…)\n\nأجب باختصار وسأبني فورًا 🚀`,
+    questions: FALLBACK_BRIEF_QS,
+  }
+}
+
 /** ═══════════ المنسّق الرئيسي ═══════════ */
 export async function* brainRequest(user, userMessage, requested, mode = {}) {
   const email = user.email
@@ -628,6 +692,13 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
 
   record(email, { role: 'user', content: userMessage }, 'user', sessionId)
   audit({ user: email, agent: 'core', action: 'route', input: userMessage.slice(0, 200) })
+
+  // ── إقرار فوري (< 100ms): "حاضر سيدي" قبل أي عمل ثقيل — الواجهة تفتح الاستوديو فورًا ──
+  try {
+    const quickTarget = route(userMessage, requested)
+    const quickName = quickTarget === 'coding' ? 'Coding' : quickTarget.charAt(0).toUpperCase() + quickTarget.slice(1)
+    yield { type: 'ack', agent: quickName, coding: quickTarget === 'coding' }
+  } catch { /* لا يعطّل الطلب */ }
 
   try {
     if (prefs.paused) throw new PausedError('⏸️ الوكلاء متوقفون مؤقتًا')
@@ -693,9 +764,6 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
         .catch(() => null)
     }
 
-    const t0 = Date.now()
-    let primaryProvider = ''
-
     setProgress(email, steps?.length ? 15 : 5, targets.length > 1 ? 'orchestrating' : 'working')
 
     let total = targets.length
@@ -718,8 +786,32 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
       setProgress(email, Math.round(15 + ((done / Math.max(1, total)) * 70)), `agent:${agentId}`)
 
       let result
-      const editIntent = !mode.refresh && liveProjectFor(user.email) && EDIT_ASK_RE.test(t.goal)
-      if (editIntent || (rt === 'coding' && looksLikeBuild(t.goal))) {
+      const editIntent = !mode.refresh && liveProjectFor(user.email) && EDIT_ASK_RE.test(normAr(t.goal))
+      // القاعدة الصارمة: أي طلب في نطاق البرمجة يمرّ بحلقة الأدوات الحقيقية حصرًا —
+      // ممنوع الرد النصي الذي يدّعي إنشاء/تعديل ملفات (النجاح الوهمي).
+      if (editIntent || rt === 'coding') {
+        // ── توضيح واحد فقط للطلبات الغامضة: أسئلة سريعة ثم بناء مهما كانت الإجابة ──
+        if (!editIntent && rt === 'coding' && !mode.refresh) {
+          const pending = briefPending.get(user.email)
+          if (pending && Date.now() - pending.ts < 30 * 60 * 1000 && userMessage !== pending.goal) {
+            t.goal = `${pending.goal}\n\nإجابات المستخدم على أسئلة التوضيح (ابنِ بناءً عليها + الأصل):\n${t.goal}`
+            briefPending.delete(user.email)
+          } else if (!pending && looksVague(t.goal)) {
+            setStatus(email, 'Coding', 'running', 'يسأل أسئلة توضيح سريعة…')
+            feed(email, 'Coding', '—', '❓ أسئلة توضيح قبل البناء…', 'brief')
+            const bq = await briefQuestions(user, t.goal)
+            briefPending.set(user.email, { goal: t.goal, ts: Date.now() })
+            record(email, { role: 'assistant', content: bq.text }, 'Coding', sessionId)
+            agentMemory(email, 'Coding', 'assistant', bq.text.slice(0, 1500))
+            setProgress(email, 100, 'done')
+            stageAllIdle(email)
+            emitBrain(email)
+            setStatus(email, 'Coding', 'done', 'بانتظار إجاباتك لبدء البناء ✓')
+            yield { type: 'brief_questions', questions: bq.questions }
+            yield { type: 'answer', agent: 'Coding', content: bq.text }
+            return
+          }
+        }
         setStatus(email, 'Coding', 'running', mode.refresh ? 'تحديث ملخص المشروع' : 'يبني وينفّذ في مساحة العمل…')
         if (mode.refresh) {
           const mem = contextBlock(email, userMessage)
@@ -727,8 +819,8 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
         } else {
           // ── تعديل باللغة الطبيعية على موقع قائم: يقترح أولاً ثم ينتظر موافقة المستخدم ──
           const editProj = !mode.refresh ? liveProjectFor(user.email) : null
-          const isEditAsk = EDIT_ASK_RE.test(t.goal)
-          if (editProj && isEditAsk && !/ابن|انشئ|اصنع|اعمل لي|أسوي/.test(t.goal)) {
+          const isEditAsk = EDIT_ASK_RE.test(normAr(t.goal))
+          if (editProj && isEditAsk && !/ابن|انشئ|اصنع|اعمل لي|أسوي/.test(normAr(t.goal))) {
             setStatus(email, 'Coding', 'running', 'يحضّر مقترح التعديل على موقعك الحالي…')
             feed(email, 'Coding', '—', `📋 اقتراح تعديل على «${editProj.name}» — ${t.goal.slice(0, 120)}`, 'propose')
             let out2 = ''
@@ -738,13 +830,15 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
             }
             result = { content: out2 || 'اقتراح التعديل جاهز.' }
             setStatus(email, 'Coding', 'done', 'اقتراح التعديل جاهز — بانتظار موافقتك ✓')
-          } else if (prefs.pipeline !== false) {
+          } else if (prefs.pipeline !== false && looksLikeBuild(t.goal)) {
+            // بناء موقع/مشروع متكامل: خط الأنابيب الكامل (مخطط ← بناء ← تصميم ← شرح)
             for await (const ev of runBuildPipeline(user, t.goal, { signal: canc })) {
               if (ev.type === 'answer') result = { content: ev.content }
               yield ev
             }
             if (!result) result = { content: 'انتهت مهمة البناء.' }
           } else {
+            // مهمة ملفات/أوامر مباشرة: حلقة الأدوات المباشرة (كتابة/قراءة/تنفيذ حقيقي)
             for await (const ev of runCoding(user, t.goal, { signal: canc })) {
               if (ev.type === 'answer') result = { content: ev.content }
               yield ev
@@ -793,8 +887,6 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
       }
 
       finalOutput = String(result?.content || '').trim()
-      if (result?.provider) primaryProvider = result.provider
-      else if (!primaryProvider && t.agent === 'coding') primaryProvider = 'workspace'
       s.lastOutput = finalOutput
       const preview = finalOutput.slice(0, 200)
       setStatus(email, agentId, 'done', preview)
@@ -822,12 +914,8 @@ export async function* brainRequest(user, userMessage, requested, mode = {}) {
       emitBrain(email)
     }
 
-    // تذييل السرعة: يصنع الشفافية ويُظهر تحسّن زمن الاستجابة
-    const elapsed = Date.now() - t0
-    if (elapsed > 800) {
-      const sec = (elapsed / 1000).toFixed(1)
-      finalOutput += `\n\n---\n⚡ ${primaryProvider || 'أسرع مسار'} • ${sec} ثانية`
-    }
+    // لا تذييل للمزود/الزمن في وجه المستخدم (دردشة نظيفة مثل Kimi) —
+    // التوقيت محفوظ في السجلات عبر audit/agentMemory فقط.
 
     // 2) تقييم/تعاون — يُعطَّل في الوضع المستقل (كل وكيل يعمل وحده)
     let review = null
@@ -905,7 +993,8 @@ function systemFor(agent) {
     Design: `You are GHENNAI's Design Agent — the Designer. Concrete palettes, typography, wireframes, spacing. User's language.`,
     Genie: `You are the GENIE — Supreme Executor of GHENNAI. Answer ANY question, build & run anything, analyze, design, and write in any language. Deliver complete structured masterpieces. Never refuse.`,
     General: `You are GHENNAI — helpful, brilliant assistant. Concise, warm, structured. Answer any question. User's language.`,
-    Coding: `You are GHENNAI's Coding Agent — the Executor. Build, run, fix and polish projects in the user's workspace (HTML/CSS/JS, React, Vite, Python, apps). Be concrete: paths, commands, code. User's language.`,
+    Coding: `You are GHENNAI's Coding Agent — the Executor. Build, run, fix and polish projects in the user's workspace (HTML/CSS/JS, React, Vite, Python, apps). Be concrete: paths, commands, code. User's language.
+GROUNDING LAW (iron rule): you have NO tools in this text mode — NEVER claim you created, modified, built, ran, or deployed any file or project. If the user wants file/system actions, say plainly you will hand the task to the Coding execution loop. False success claims are strictly forbidden.`,
     Voice: `You are GHENNAI's Voice Agent — the Voice unit. The user is interacting by voice or wants spoken replies. Answer in short, warm, flowery sentences that sound beautiful when read aloud: avoid long code blocks and heavy markdown, keep paragraphs small, and end with a gentle invitation or question. If the request needs another unit (someone else's domain), say so briefly in one voice-friendly sentence and defer. Use the user's language.`,
   }[agent] || `You are a helpful AI agent. Respond in the user's language.`
   return base + personaBlock(agent) + IDENTITY

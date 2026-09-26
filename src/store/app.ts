@@ -33,6 +33,16 @@ export interface TermLine {
   text: string
   ts: number
 }
+export interface ApprovalReq {
+  id: number
+  tool: string
+  command?: string | null
+  cwd?: string | null
+  path?: string | null
+  reason?: string
+  kind?: string | null
+  ts?: number
+}
 export interface CodeAction {
   id: string
   ts: number
@@ -135,9 +145,14 @@ interface AppState {
   user: { email: string; name: string } | null
   booting: boolean
   msgs: Msg[]
+  /** محادثة مستقلة لكل وكيل: التبديل يفتح محادثة الوكيل الخاصة ويحفظ السابقة */
+  agentMsgs: Record<string, Msg[]>
   activity: ActivityItem[]
   agent: AgentId
   busy: boolean
+  agentState: string
+  pendingApprovals: ApprovalReq[]
+  agentMode: 'safe' | 'assisted' | 'autonomous'
 
   arenaOpen: boolean
   projectName: string
@@ -190,6 +205,16 @@ interface AppState {
 
   sideCollapsed: boolean
   zen: boolean
+  /** لوح الكود الحي بجانب المحادثة */
+  railOpen: boolean
+  setRailOpen: (b: boolean) => void
+  /** جلسة لوح نشطة (بناء جارٍ أو منتهٍ حديثًا) + اكتماله */
+  railSession: boolean
+  railDone: boolean
+  setRailSession: (b: boolean) => void
+  setRailDone: (b: boolean) => void
+  /** تصفير الملفات الحية مع بدء بناء جديد */
+  resetLive: () => void
   focusTick: number
   saveTick: number
   codeTab: 'files' | 'code' | 'preview'
@@ -209,6 +234,11 @@ interface AppState {
   pushToast: (t: Omit<Toast, 'id' | 'ts'>) => void
   dismissToast: (id: string) => void
   setBusy: (b: boolean) => void
+  setAgentState: (s: string) => void
+  setApprovals: (list: ApprovalReq[]) => void
+  upsertApproval: (a: ApprovalReq) => void
+  removeApproval: (id: number) => void
+  setAgentMode: (m: 'safe' | 'assisted' | 'autonomous') => void
   pushActivity: (a: Omit<ActivityItem, 'id' | 'time'>) => void
   setAgent: (a: AgentId) => void
 
@@ -257,6 +287,11 @@ interface AppState {
   exitCodingMode: () => void
   openStudio: () => void
   closeStudio: () => void
+  studioIDEOpen: boolean
+  studioRoot: string | null
+  openStudioIDE: (root?: string | null) => void
+  closeStudioIDE: () => void
+  setStudioRoot: (r: string | null) => void
   setCodingVoice: (b: boolean) => void
   codeToken: (chunk: { content?: string | null; file?: string | null; action?: string | null }) => void
   pushCodeAction: (a: Omit<CodeAction, 'id' | 'ts'>) => void
@@ -280,14 +315,59 @@ interface AppState {
 
 const uid = () => Math.random().toString(36).slice(2, 10)
 
+/** الأسماء العربية للوكلاء لرسائل الانتقال */
+export const AGENT_AR: Record<string, string> = {
+  Core: 'المنسق', Coding: 'المبرمج', Research: 'الباحث', Study: 'المعلم', Design: 'المصمم', Genie: 'الجني', Voice: 'الصوتي',
+}
+
+const msgKey = (agent: string) => `ghn_msgs_${agent}`
+
+function loadAgentMsgs(agent: string): Msg[] {
+  try {
+    // ترحيل مرة واحدة من المفتاح القديم المشترك إلى المنسق
+    if (agent === 'Core') {
+      const legacy = localStorage.getItem('ghn_msgs')
+      if (legacy) {
+        const arr = JSON.parse(legacy) as Msg[]
+        if (Array.isArray(arr) && arr.length) {
+          localStorage.setItem(msgKey('Core'), legacy)
+          localStorage.removeItem('ghn_msgs')
+          return arr
+        }
+      }
+    }
+    const raw = localStorage.getItem(msgKey(agent))
+    if (!raw) return []
+    const arr = JSON.parse(raw) as Msg[]
+    return Array.isArray(arr) ? arr : []
+  } catch {
+    return []
+  }
+}
+
+function saveAgentMsgs(agent: string, msgs: Msg[]) {
+  try {
+    if (!msgs.length) {
+      localStorage.removeItem(msgKey(agent))
+      return
+    }
+    const keep = msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, agent: m.agent, streaming: false, ts: m.ts }))
+    localStorage.setItem(msgKey(agent), JSON.stringify(keep.slice(-80)))
+  } catch { /* noop */ }
+}
+
 export const useApp = create<AppState>((set, get) => ({
   token: getToken(),
   user: null,
   booting: true,
   msgs: [],
+  agentMsgs: {},
   activity: [],
   agent: 'Core',
   busy: false,
+  agentState: 'IDLE',
+  pendingApprovals: [],
+  agentMode: 'assisted',
 
   arenaOpen: false,
   projectName: 'project',
@@ -317,6 +397,8 @@ export const useApp = create<AppState>((set, get) => ({
   editBusy: false,
   editPend: null,
   studioOpen: false,
+  studioIDEOpen: false,
+  studioRoot: null,
 
   projects: [],
   prjOpen: false,
@@ -340,6 +422,13 @@ export const useApp = create<AppState>((set, get) => ({
 
   sideCollapsed: false,
   zen: false,
+  railOpen: true,
+  setRailOpen: (b) => set({ railOpen: b }),
+  railSession: false,
+  railDone: false,
+  setRailSession: (b) => set({ railSession: b }),
+  setRailDone: (b) => set({ railDone: b }),
+  resetLive: () => set({ liveFiles: {}, codeFiles: [], activeCodeFile: null, codeFileContent: null }),
   focusTick: 0,
   saveTick: 0,
   codeTab: 'code',
@@ -369,19 +458,21 @@ export const useApp = create<AppState>((set, get) => ({
   logout: () => {
     setToken(null)
     set({
-      user: null, token: null, msgs: [], arenaOpen: false, activity: [],
+      user: null, token: null, msgs: [], agentMsgs: {}, railSession: false, railDone: false, arenaOpen: false, activity: [],
       termLines: [], previewUrl: null, deployState: 'idle', deployUrl: null,
-      codingOpen: false, codingShot: null, codeFiles: [], activeCodeFile: null, codeFileContent: null, editTarget: null, editBusy: false, editPend: null, liveFiles: {}, studioOpen: false,
+      codingOpen: false, codingShot: null, codeFiles: [], activeCodeFile: null, codeFileContent: null, editTarget: null, editBusy: false, editPend: null, liveFiles: {}, studioOpen: false, studioIDEOpen: false, studioRoot: null,
       brainOpen: false, sessionsOpen: false, resumeText: null, resumeTitle: null, brainBoard: {}, brainProgress: 0, brainPhase: 'idle', brainFeed: [], brainPaused: false,
 prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', speechOut: false, paused: false, interval: 0, team: true, models: {} },
     })
   },
 
   resetChat: () => {
+    // يمسح محادثة الوكيل الحالي فقط — محادثات الوكلاء الآخرين تبقى محفوظة
+    const { agent } = get()
     try {
-      localStorage.removeItem('ghn_msgs')
+      localStorage.removeItem(msgKey(agent))
     } catch { /* noop */ }
-    set({ msgs: [], activity: [], arenaOpen: false, termOpen: false, termLines: [], previewUrl: null, deployState: 'idle', codingOpen: false, codingShot: null, codeFiles: [], editTarget: null, editBusy: false, editPend: null, liveFiles: {}, studioOpen: false })
+    set((s) => ({ msgs: [], agentMsgs: { ...s.agentMsgs, [agent]: [] }, railSession: false, railDone: false, arenaOpen: false, termOpen: false, termLines: [], previewUrl: null, deployState: 'idle', codingOpen: false, codingShot: null, codeFiles: [], editTarget: null, editBusy: false, editPend: null, liveFiles: {}, studioOpen: false, studioIDEOpen: false }))
   },
 
   setBrainOpen: (b) => set({ brainOpen: b }),
@@ -431,21 +522,18 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
   invokeDeploy: () => set((s) => ({ deployInvoke: s.deployInvoke + 1 })),
 
   restoreMsgs: () => {
-    try {
-      const raw = localStorage.getItem('ghn_msgs')
-      if (!raw) return
-      const saved = JSON.parse(raw) as Msg[]
-      if (Array.isArray(saved) && saved.length && !get().msgs.length) set({ msgs: saved })
-    } catch { /* noop */ }
+    const { agent, msgs } = get()
+    if (msgs.length) return
+    const saved = loadAgentMsgs(agent)
+    if (saved.length) {
+      set((s) => ({ msgs: saved, agentMsgs: { ...s.agentMsgs, [agent]: saved } }))
+    }
   },
 
   persistMsgs: () => {
-    try {
-      const { msgs } = get()
-      if (!msgs.length) return
-      const keep = msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, agent: m.agent, streaming: false, ts: m.ts }))
-      localStorage.setItem('ghn_msgs', JSON.stringify(keep.slice(-80)))
-    } catch { /* noop */ }
+    const { msgs, agent } = get()
+    set((s) => ({ agentMsgs: { ...s.agentMsgs, [agent]: msgs } }))
+    saveAgentMsgs(agent, msgs)
   },
 
   addUserMsg: (content) => {
@@ -503,9 +591,40 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })),
 
   setBusy: (b) => set({ busy: b }),
+  setAgentState: (s) => set({ agentState: s, busy: !['IDLE', 'READY', 'FAILED', 'STOPPED'].includes(s) }),
+  setApprovals: (list) => set({ pendingApprovals: list }),
+  upsertApproval: (a) =>
+    set((s) => ({
+      pendingApprovals: s.pendingApprovals.some((x) => x.id === a.id)
+        ? s.pendingApprovals.map((x) => (x.id === a.id ? { ...x, ...a } : x))
+        : [...s.pendingApprovals, a],
+    })),
+  removeApproval: (id) => set((s) => ({ pendingApprovals: s.pendingApprovals.filter((x) => x.id !== id) })),
+  setAgentMode: (m) => set({ agentMode: m }),
   pushActivity: (a) => set((s) => ({ activity: [{ id: uid(), time: Date.now(), ...a }, ...s.activity].slice(0, 60) })),
 
-  setAgent: (a) => set({ agent: a }),
+  setAgent: (a) => {
+    const { agent: prev, msgs: cur, busy } = get()
+    if (a === prev) return
+    if (busy) {
+      get().pushToast({ kind: 'info', title: 'انتظر قليلًا', message: 'انتهاء الرد الحالي قبل الانتقال لوكيل آخر' })
+      return
+    }
+    // حفظ محادثة الوكيل السابق
+    saveAgentMsgs(prev, cur)
+    // تحميل محادثة الوكيل الجديد (من الذاكرة أو التخزين)
+    const cached = get().agentMsgs[a]
+    const next = cached !== undefined ? cached : loadAgentMsgs(a)
+    const fromName = AGENT_AR[prev] || prev
+    const toName = AGENT_AR[a] || a
+    set((s) => ({
+      agent: a,
+      msgs: next,
+      agentMsgs: { ...s.agentMsgs, [prev]: cur, [a]: next },
+      activity: [{ id: uid(), time: Date.now(), agent: a, message: `🔁 انتقلت من ${fromName} إلى ${toName} — محادثة خاصة جديدة${next.length ? ` (${next.length} رسالة محفوظة)` : ''}`, status: 'info' }, ...s.activity].slice(0, 60),
+    }))
+    get().pushToast({ kind: 'info', title: `الوكيل: ${toName}`, message: next.length ? `عدت لمحادثتك مع ${toName} (${next.length} رسالة)` : `محادثة جديدة مع ${toName} — السابقة محفوظة` })
+  },
 
   openArena: (project) => set({ arenaOpen: true, projectName: project || 'project' }),
   setCodingProjectFolder: (root) => set({ codingProjectFolder: root }),
@@ -554,35 +673,41 @@ prefs: { collab: false, supervisor: false, autoGrade: false, speed: 'fast', spee
   openStudio: () => set({ studioOpen: true }),
   closeStudio: () => set({ studioOpen: false }),
 
+  openStudioIDE: (root = null) => set((s) => ({ studioIDEOpen: true, studioRoot: root ?? s.studioRoot ?? s.codingProjectFolder ?? null })),
+  closeStudioIDE: () => set({ studioIDEOpen: false }),
+  setStudioRoot: (r) => set({ studioRoot: r }),
+
   setCodingVoice: (b) => set({ codingVoice: b }),
 
   codeToken: (chunk) =>
     set((s) => {
-      if (!s.codingShot) return {}
+      // اللوح الحي يعمل مستقلًا عن غطاء ملء الشاشة: يكفي جلسة لوح نشطة
+      if (!s.codingShot && !s.railSession) return {}
       const shot = s.codingShot
+      const withShot = (patch: Partial<CodingShot>) => (shot ? { codingShot: { ...shot, ...patch } } : {})
       if (chunk.action === 'open' || chunk.action === 'edit') {
         const liveFiles = { ...s.liveFiles }
         if (chunk.file) liveFiles[chunk.file] = ''
         return {
-          codingShot: { ...shot, typed: { file: chunk.file || null, text: '' }, error: null },
+          ...withShot({ typed: { file: chunk.file || null, text: '' }, error: null }),
           liveFiles,
           activeCodeFile: chunk.file || s.activeCodeFile,
         }
       }
       if (chunk.action === 'done') {
         const lastContent = s.activeCodeFile && s.liveFiles[s.activeCodeFile] ? s.liveFiles[s.activeCodeFile] : s.codeFileContent
-        return { codingShot: { ...shot, typed: null }, liveFiles: {}, codeFileContent: lastContent }
+        // نُبقي آخر ملفات حية للّوح بدل مسحها فورًا — تُمسح مع بدء بناء جديد
+        return { ...withShot({ typed: null }), codeFileContent: lastContent }
       }
       if (chunk.action === 'boot') {
         const liveFiles = { ...s.liveFiles }
         if (chunk.file) liveFiles[chunk.file] = chunk.content || ''
-        return { codingShot: { ...shot }, liveFiles }
+        return { liveFiles }
       }
       return {
-        codingShot: {
-          ...shot,
-          typed: { file: chunk.file ?? shot.typed?.file ?? null, text: (shot.typed?.text || '') + (chunk.content || '') },
-        },
+        ...withShot({
+          typed: { file: chunk.file ?? shot?.typed?.file ?? null, text: (shot?.typed?.text || '') + (chunk.content || '') },
+        }),
         liveFiles:
           chunk.file && chunk.content
             ? { ...s.liveFiles, [chunk.file]: (s.liveFiles[chunk.file] || '') + chunk.content }

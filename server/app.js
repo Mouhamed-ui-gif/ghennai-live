@@ -13,8 +13,12 @@ import visionRoutes from './routes/vision.js'
 import deployRoutes from './routes/deploy.js'
 import liveRoutes from './routes/live.js'
 import brainRoutes from './routes/brain.js'
+import approvalsRoutes from './routes/approvals.js'
 import projectRoutes from './routes/projects.js'
 import voiceRoutes, { ttsAvailable, isSttAvailable } from './routes/voice.js'
+import previewRoutes from './routes/preview.js'
+import providersRoutes from './routes/providers.js'
+import builderRoutes from './routes/builder.js'
 
 const app = express()
 
@@ -39,11 +43,15 @@ app.get('/api/stt-available', async (req, res) => res.json({ stt: await isSttAva
 app.use('/api', authRoutes)
 app.use('/api', chatRoutes)
 app.use('/api/brain', brainRoutes)
+app.use('/api/approvals', approvalsRoutes)
 app.use('/api/workspace', workspaceRoutes)
 app.use('/api/vision', visionRoutes)
 app.use('/api/voice', voiceRoutes)
 app.use('/api/deploy', deployRoutes)
 app.use('/api/projects', projectRoutes)
+app.use('/api/preview', previewRoutes)
+app.use('/api', providersRoutes)
+app.use('/api/builder', builderRoutes)
 
 // روابط المواقع الفورية /live/<code>/ — قبل منتصف SPA حتى لا تعترضها صفحة التطبيق
 app.use('/live', liveRoutes)

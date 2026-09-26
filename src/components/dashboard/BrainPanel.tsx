@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Brain, GitMerge, Layers, TrendingUp, Pause, Play, RotateCcw, Download, Volume2, Loader2, X, Cpu, Radio,
+  Brain, GitMerge, Layers, TrendingUp, Pause, Play, Download, Volume2, Loader2, X, Cpu, Radio,
 } from 'lucide-react'
 import { useApp, type BrainAgentState } from '../../store/app'
 import { brain } from '../../api/client'
@@ -12,9 +12,6 @@ const ROLES: Record<string, string> = { Core: 'المعمار', Coding: 'الم�
 const ROLES_EN: Record<string, string> = { Core: 'Architect', Coding: 'Executor', Research: 'Researcher', Study: 'Teacher', Design: 'Designer', Genie: 'Supreme Executor', Voice: 'Voice' }
 const COLORS: Record<string, string> = { Core: '#22d3ee', Coding: '#a78bfa', Research: '#fbbf24', Study: '#34d399', Design: '#fb7185', Genie: '#f472b6', Voice: '#38bdf8' }
 const ICON_BY_AGENT: Record<string, string> = { Core: '🧠', Coding: '⌨️', Research: '🌍', Study: '📚', Design: '🎨', Genie: '🧞', Voice: '🎙️' }
-
-const statusLabel = (s: string, l: string) =>
-  ({ idle: '', running: l === 'ar' ? 'يعمل…' : 'working…', done: l === 'ar' ? 'اكتمل ✓' : 'done ✓', error: l === 'ar' ? 'خطأ' : 'error', paused: l === 'ar' ? 'متوقف' : 'paused' }[s] || s)
 
 function speak(text: string, lang: string) {
   try {
@@ -30,7 +27,7 @@ function AgentCard({ name, st, lang }: { name: string; st?: BrainAgentState; lan
   const color = COLORS[name] || '#22d3ee'
   const active = a.status === 'running'
   const flash = useMemo(() => {
-    if (a.status === 'done' || a.status === 'error') return Math.random().toString(36).slice(2, 8)
+    if (a.status === 'done' || a.status === 'error') return String(a.updatedAt || Date.now())
     return ''
   }, [a.status, a.updatedAt])
 
@@ -96,12 +93,11 @@ function AgentCard({ name, st, lang }: { name: string; st?: BrainAgentState; lan
 }
 
 export function BrainPanel({ onClose }: { onClose: () => void }) {
-  const { t, lang } = useI18n()
+  const { lang } = useI18n()
   const board = useApp((s) => s.brainBoard)
   const progress = useApp((s) => s.brainProgress)
   const phase = useApp((s) => s.brainPhase)
   const feed = useApp((s) => s.brainFeed)
-  const paused = useApp((s) => s.brainPaused)
   const prefs = useApp((s) => s.prefs)
   const models = useApp((s) => s.agentModels)
   const [exporting, setExporting] = useState(false)

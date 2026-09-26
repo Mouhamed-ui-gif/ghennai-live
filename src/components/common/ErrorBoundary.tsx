@@ -1,35 +1,41 @@
 import { Component, type ReactNode } from 'react'
 
-interface State {
-  error: string | null
+interface Props {
+  children: ReactNode
+  fallback?: ReactNode
 }
 
-export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
+interface State {
+  error: Error | null
+}
+
+/** حدّ أخطاء يمنع انهيار التطبيق كاملًا ويعرض رسالة جميلة ثلاثية الأبعاد */
+export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null }
 
-  static getDerivedStateFromError(err: unknown): State {
-    return { error: String((err as Error)?.message || err) }
+  static getDerivedStateFromError(error: Error): State {
+    return { error }
   }
 
-  componentDidCatch(err: unknown) {
-    console.error('[Ghennai-UI]', err)
+  componentDidCatch(error: Error, info: unknown) {
+    console.error('[ErrorBoundary]', error, info)
   }
 
   render() {
     if (this.state.error) {
+      if (this.props.fallback) return this.props.fallback
       return (
-        <div dir="rtl" className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[#060913] p-6 text-center">
-          <p className="text-5xl">⚠️</p>
-          <h1 className="text-xl font-bold text-white">حدث خطأ غير متوقع في الواجهة</h1>
-          <p className="max-w-md break-words rounded-2xl bg-rose-500/10 p-4 font-mono text-sm text-rose-300" dir="ltr">
-            {this.state.error}
-          </p>
-          <button
-            onClick={() => this.setState({ error: null })}
-            className="rounded-2xl bg-gradient-to-l from-cyan-500 to-violet-500 px-6 py-2.5 font-bold text-white"
-          >
-            إعادة المحاولة
-          </button>
+        <div className="grid min-h-screen place-items-center bg-night-950 p-6">
+          <div className="glass-strong tilt-3d max-w-md rounded-3xl p-8 text-center">
+            <p className="text-5xl">🛸</p>
+            <h1 className="grad-text mt-3 text-2xl font-extrabold">حدث خطأ غير متوقع</h1>
+            <p className="mt-2 text-sm leading-relaxed text-slate-400" dir="auto">
+              {this.state.error.message || 'Unknown error'}
+            </p>
+            <button onClick={() => window.location.reload()} className="btn-primary mt-6 w-full">
+              إعادة التحميل
+            </button>
+          </div>
         </div>
       )
     }

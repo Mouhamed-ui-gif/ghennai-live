@@ -20,7 +20,7 @@ interface StreamBgProps {
  * بانتقال ناعم (crossfade) مع تحميل مسبق للصورة التالية لسرعة الظهور.
  */
 export function StreamBg({ images, opacity = 0.5, cycleMs = 9000, className = '', children }: StreamBgProps) {
-  const list = useMemo(() => images.filter(Boolean).map(baseUrl), [images.join('|')])
+  const list = useMemo(() => images.filter(Boolean).map(baseUrl), [images])
   const [i, setI] = useState(0)
   const preloaded = useRef<Set<string>>(new Set())
 
@@ -28,7 +28,7 @@ export function StreamBg({ images, opacity = 0.5, cycleMs = 9000, className = ''
     if (!cycleMs || list.length < 2) return
     const iv = setInterval(() => setI((x) => (x + 1) % list.length), cycleMs)
     return () => clearInterval(iv)
-  }, [cycleMs, list.length])
+  }, [cycleMs, list])
 
   useEffect(() => {
     list.forEach((src) => {
@@ -38,7 +38,7 @@ export function StreamBg({ images, opacity = 0.5, cycleMs = 9000, className = ''
       img.decoding = 'async'
       img.src = src
     })
-  }, [list.length])
+  }, [list])
 
   if (!list.length) return <div className={`absolute inset-0 overflow-hidden ${className}`}>{children}</div>
 

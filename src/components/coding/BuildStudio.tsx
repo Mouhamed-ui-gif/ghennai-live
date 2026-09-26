@@ -38,7 +38,7 @@ const PAGE_OPTIONS = ['رئيسية', 'من نحن', 'الخدمات', 'أعما
 export function BuildStudio() {
   const close = useApp((s) => s.closeStudio)
   const projectName = useApp((s) => s.projectName)
-  const openArena = useApp((s) => s.openArena)
+  const openStudioIDE = useApp((s) => s.openStudioIDE)
   const { send } = useChat()
 
   const [step, setStep] = useState(0)
@@ -50,6 +50,9 @@ export function BuildStudio() {
   const [styleId, setStyleId] = useState<string | null>(null)
   const [colorHex, setColorHex] = useState<string | null>(null)
   const [lang, setLang] = useState<'ar' | 'en' | 'both'>('ar')
+  const [motion, setMotion] = useState<'calm' | 'rich' | 'wild'>('rich')
+  const [fx3d, setFx3d] = useState(true)
+  const [imagery, setImagery] = useState<'photos' | 'icons' | 'mix'>('photos')
   const [customType, setCustomType] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -86,20 +89,24 @@ export function BuildStudio() {
       `• الصفحات: ${pagesList}`,
       styleDesc,
       colorLine,
+      `• مستوى الحركة: ${motion === 'calm' ? 'هادئة وناعمة' : motion === 'wild' ? 'صاخبة ومليئة بالمؤثرات' : 'غنية ومتوازنة'} — حركات ظهور متدرجة، عدادات، شريط متحرك، تفاعلات hover على كل عنصر.`,
+      `• مؤثرات ثلاثية الأبعاد: ${fx3d ? 'نعم — إمالة تفاعلية + parallax + أشكال عائمة بعمق' : 'لا — تصميم مسطح أنيق'}`,
+      `• الصور: ${imagery === 'photos' ? 'صور فوتوغرافية حقيقية (Unsplash) لكل قسم مع خلفيات متدرجة احتياطية' : imagery === 'icons' ? 'أيقونات SVG مصممة بعناية' : 'مزيج صور حقيقية وأيقونات'}`,
       '',
+      '• شاشة تحميل (preloader) بنسبة مئوية تتلاشى عند الاكتمال.',
       '• صمّم واجهة فريدة واحترافية بتصميم لا يقل عن مبهر — هوامش مريحة، تباين واضح، تأثيرات حركية ناعمة عند الظهور.',
       '• تخطيط متجاوب بالكامل (موبايل + تابلت + سطح مكتب)، متوافق مع جميع الشاشات.',
-      '• استخدم محتوى واقعيًا عالي الجودة — نصوص مفصلة وليست placeholder، صورًا عبر inline SVG أو Data-URI.',
+      '• استخدم محتوى واقعيًا عالي الجودة — نصوص مفصلة وليست placeholder، وصورًا فوتوغرافية حقيقية عبر Unsplash (images.unsplash.com مع ?q=80&w=1600&auto=format&fit=crop) لكل قسم رئيسي، مع تدرج لوني تحت كل صورة كاحتياطي، وloading="lazy" ما عدا البطل.',
       '• اختر خطوطًا عربية احترافية من Google Fonts (مثلاً Cairo أو Tajawal أو IBM Plex Sans Arabic).',
     ].filter(Boolean).join('\n')
-  }, [typeId, siteName, desc, audience, pages, styleId, colorHex, lang, customType, projectName, type, style])
+  }, [typeId, siteName, desc, audience, pages, styleId, colorHex, lang, motion, fx3d, imagery, customType, projectName, type, style])
 
   const submit = async () => {
     if (submitting) return
     setSubmitting(true)
-    openArena(siteName || projectName || 'الموقع الجديد')
-    await send(brief, 'Coding')
+    openStudioIDE()
     close()
+    await send(brief, 'Coding')
   }
 
   const canNext = step === 0 ? !!typeId : step === 1 ? !!(siteName.trim() || desc.trim()) : true
@@ -220,10 +227,40 @@ export function BuildStudio() {
                 </div>
               </div>
 
+              {/* مستوى الحركة */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-slate-400">مستوى الحركة ✨</label>
+                <div className="flex gap-2">
+                  {([['calm', '🌿 هادئة'], ['rich', '✨ غنية'], ['wild', '🔥 صاخبة']] as const).map(([v, l]) => (
+                    <button key={v} onClick={() => setMotion(v)} className={`flex-1 rounded-xl px-3 py-2 text-[12px] font-medium transition ${motion === v ? 'bg-violet-500 text-white' : 'bg-white/5 text-slate-300 hover:bg-white/10'}`}>{l}</button>
+                  ))}
+                </div>
+              </div>
+
+              {/* ثلاثي الأبعاد + الصور */}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                  <button onClick={() => setFx3d((v) => !v)} className="flex w-full items-center justify-between gap-2">
+                    <span className="text-[12px] font-bold text-white">🧊 مؤثرات ثلاثية الأبعاد</span>
+                    <span className={`relative h-6 w-11 rounded-full transition ${fx3d ? 'bg-violet-500' : 'bg-white/10'}`}>
+                      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${fx3d ? 'start-5' : 'start-0.5'}`} style={fx3d ? { insetInlineStart: '22px' } : { insetInlineStart: '2px' }} />
+                    </span>
+                  </button>
+                  <p className="mt-1 text-[11px] text-slate-500">إمالة تفاعلية + parallax + عمق</p>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-semibold text-slate-400">نوع الصور 🖼️</label>
+                  <div className="flex gap-2">
+                    {([['photos', '📷 حقيقية'], ['mix', '🎨 مزيج'], ['icons', '🔷 أيقونات']] as const).map(([v, l]) => (
+                      <button key={v} onClick={() => setImagery(v)} className={`flex-1 rounded-xl px-2 py-2 text-[12px] font-medium transition ${imagery === v ? 'bg-violet-500 text-white' : 'bg-white/5 text-slate-300 hover:bg-white/10'}`}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
               {/* اللغة */}
               <div>
-                <label className="mb-1.5 block text-[11px] font-semibold text-slate-400">لغة المحتوى</label>
-                <div className="flex gap-2">
+                <label className="mb-1.5 block text-[11px] font-semibold text-slate-400">لغة المحتوى</label>                <div className="flex gap-2">
                   {([['ar', 'عربي'], ['en', 'English'], ['both', 'الاثنان']] as const).map(([v, l]) => (
                     <button key={v} onClick={() => setLang(v)} className={`rounded-xl px-3 py-1.5 text-[12px] font-medium transition ${lang === v ? 'bg-violet-500 text-white' : 'bg-white/5 text-slate-300 hover:bg-white/10'}`}>{l}</button>
                   ))}
