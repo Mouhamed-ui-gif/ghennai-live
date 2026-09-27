@@ -11,6 +11,7 @@ import { seedTemplates } from '../lib/templateKit.js'
 import { repairUserSites, validateUserSite } from '../lib/siteDoctor.js'
 import { ensureProject, setProjectMeta, snapshotProject, listVersions, guessProjectRoot, siteRootFor } from '../lib/projects.js'
 import { ensureShare, publicUrl } from '../lib/share.js'
+import { composeDesignSystem, genericTemplateFlags } from './designEngine.js'
 import { gateTool } from '../lib/approvalGate.js'
 import { gitRepoInfo } from '../lib/approvalGate.js'
 import * as procs from '../lib/processes.js'
@@ -102,6 +103,8 @@ function designQualityCheck(email, root) {
   if (!/(perspective|preserve-3d|translateZ|rotateX|rotateY|data-speed|parallax|tilt)/i.test(html + css)) flags.push({ label: 'لا عمق ثلاثي الأبعاد — أضف tilt تفاعلي/parallax/أشكالًا عائمة', code: 'depth' })
   if (!/(preloader|loader|window[^;]{0,40}load)/i.test(html)) flags.push({ label: 'لا شاشة تحميل — أضف preloader بنسبة مئوية يتلاشى عند اكتمال التحميل', code: 'loader' })
   if (!/(marquee|counter|slider|accordion|testimonial)/i.test(html)) flags.push({ label: 'ينقصه عناصر حية — أضف marquee وعدادات متحركة وسلايدر آراء وأكورديون', code: 'lively' })
+  // بوابة القالب العام: موقع "خلفية + عنوان + بطاقات + تذييل" مرفوض ويُعاد بناؤه
+  flags.push(...genericTemplateFlags(html, css))
   return flags
 }
 
@@ -712,12 +715,19 @@ async function* runCoding(user, userMessage, opts = {}) {
     const designSpec = design
       ? `\n\nDESIGN SPEC — خطة المعمار المصغّرة (التزم بها ما أمكن):\n- لوحة الألوان المقترحة: ${Array.isArray(design.palette) ? (design.palette.join(' ') || '—') : '—'}\n- الحزمة التقنية: ${design.stack || 'html/css/js'}\n- الخطوات:${Array.isArray(design.steps) && design.steps.length ? `\n${design.steps.map((s) => `  • ${s}`).join('\n')}` : ' تنفيذ مباشر'}\n- لا تنسَ لمسةً توقيعيةً واحدة تميّز الموقع (motif مميز)، وخطوط عربية احترافية إن كان المحتوى عربيًا.`
       : ''
+    // محرك التصميم: نظام أصلي مولّد حسب الصناعة — يُحقن في كل بناء دردشة كان أو معالجًا
+    let designSystem = ''
+    try {
+      const ds = composeDesignSystem(userMessage)
+      designSystem = '\n\n' + ds.promptBlock
+      emitUser(user.email, { type: 'agent', agent: 'Design', message: `🎨 نظام التصميم (${ds.industry}): ${ds.direction.slice(0, 90)}`, status: 'running' })
+    } catch { /* البناء يستمر بدون النظام */ }
     messages.push(
       { role: 'system', content: SYSTEM_PROMPT + memory },
       {
         role: 'user',
         content:
-          `Workspace root: ${ws}\n\nTHIS PROJECT'S OWN FOLDER: "${projectRoot}" — write EVERY file of this site inside it with full prefixed paths (e.g. "${projectRoot}/index.html", "${projectRoot}/style.css", "${projectRoot}/app.js"). Never write outside that folder. Premium templates live in "_ghennai/templates" (copy a folder into "${projectRoot}" then edit it if helpful).\n\nUser request: ${userMessage}${designSpec}\n\nWhen done, reply with the final summary.` +
+          `Workspace root: ${ws}\n\nTHIS PROJECT'S OWN FOLDER: "${projectRoot}" — write EVERY file of this site inside it with full prefixed paths (e.g. "${projectRoot}/index.html", "${projectRoot}/style.css", "${projectRoot}/app.js"). Never write outside that folder. Premium templates live in "_ghennai/templates" (copy a folder into "${projectRoot}" then edit it if helpful).\n\nUser request: ${userMessage}${designSpec}${designSystem}\n\nWhen done, reply with the final summary.` +
           `\n(ملاحظة نظام: إذا سُئلت من صنعك / من الذي صنعك / من برمجك / who created you؟ فأجب أن صانعك هو **محمد غناي (Mohamed Ghennay)** المطوّر الوحيد لـ GHENNAI.)`,
       },
     )

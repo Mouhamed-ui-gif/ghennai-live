@@ -57,16 +57,25 @@ router.post('/chat', requireAuth, chatLimiter, async (req, res) => {
     // كل حدث يُبث للمستخدم (أدوات/طرفية/نشاط) يصل أيضًا لجلسة هذا الطلب
     unbind = bindRequestStream(user.email, send)
 
+    // نبض حياة كل 20 ثانية: يمنع مهلة الخمول لدى العملاء والبروكسيات أثناء التفكير الطويل
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded && !ac.signal.aborted) {
+        try { res.write(`: keepalive ${Date.now()}\n\n`) } catch { /* noop */ }
+      }
+    }, 20000)
+
     for await (const event of handleRequest(user, message, agent, { edit: edit ? { ...edit } : null, signal: ac.signal })) {
       if (res.writableEnded || ac.signal.aborted) break
       send(event)
       if (event.type === 'answer') {
+        clearInterval(heartbeat)
         send({ type: 'done', content: event.content })
         res.end()
         unbind()
         return
       }
     }
+    clearInterval(heartbeat)
     clearTimeout(hardDeadline)
     if (!res.writableEnded) res.end()
   } catch (err) {
@@ -84,6 +93,7 @@ router.post('/chat', requireAuth, chatLimiter, async (req, res) => {
       res.end()
     }
   } finally {
+    try { clearInterval(heartbeat) } catch { /* قد لا يكون معرّفًا */ }
     clearTimeout(hardDeadline)
     unbind()
     // الإيقاف اليدوي حذف التشغيل مسبقًا وأرسل STOPPED — لا نتجاوزه هنا

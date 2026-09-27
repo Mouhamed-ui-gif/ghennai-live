@@ -6,9 +6,32 @@ function ensureInWorkspace(workspace, target) {
   return safeResolve(workspace, target)
 }
 
+/** رفض الكتابات الصورية: محتوى فارغ/نقط/اختصار — يُرجع خطأ صريحًا يجبر النموذج على كتابة حقيقية */
+function vacuousWrite(path, content) {
+  const s = String(content ?? '')
+  const t = s.trim()
+  const ext = String(path || '').split('.').pop()?.toLowerCase() || ''
+  if (!t) return 'محتوى فارغ — اكتب الملف كاملًا فعليًا، لا تترك فراغًا'
+  if (/^(\.{1,3}|…+|…\s*|\(?(\.\.\.|…)\)?|TODO|TBD|placeholder|lorem ipsum)$/i.test(t) || t.length <= 3) {
+    return 'محتوى صوري مرفوض ("…" أو نقاط) — اكتب الملف الحقيقي الكامل الآن'
+  }
+  if (['html', 'htm'].includes(ext) && t.length < 500) {
+    return `ملف HTML من ${t.length} حرفًا فقط — الحد الأدنى 500 حرف من HTML حقيقي (<!DOCTYPE + head + body)`
+  }
+  if (['css'].includes(ext) && t.length < 200) {
+    return `ملف CSS من ${t.length} حرفًا فقط — اكتب أنماطًا حقيقية (200+ حرف)`
+  }
+  if (['js', 'mjs'].includes(ext) && t.length < 100) {
+    return `ملف JS من ${t.length} حرفًا فقط — اكتب كودًا حقيقيًا (100+ حرف)`
+  }
+  return null
+}
+
 const filesystem = {
   async writeFile({ workspace, path: filePath, content }) {
     const abs = ensureInWorkspace(workspace, filePath)
+    const refused = vacuousWrite(filePath, content)
+    if (refused) return { ok: false, error: `⛔ كتابة مرفوضة في ${filePath}: ${refused}` }
     fs.mkdirSync(path.dirname(abs), { recursive: true })
     fs.writeFileSync(abs, content ?? '', 'utf-8')
     return { ok: true, path: filePath }
