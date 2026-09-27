@@ -210,6 +210,122 @@ export function detectIndustry(request) {
 }
 
 /**
+ * طبقة الدلالة: تستخرج الجمهور والهدف والمزاج من الطلب (فوق keyword الصناعة).
+ * الـpresets تبقى fallback — التحليل الدلالي هو الحكم.
+ */
+const AUDIENCES = [
+  { id: 'youth', keys: ['شباب', 'شبابيه', 'عصري للشباب', 'young', 'youth', 'teens', 'طلاب', 'students'] },
+  { id: 'families', keys: ['عائلات', 'عائلي', 'family', 'families'] },
+  { id: 'business', keys: ['شركات', 'اعمال', 'أعمال', 'b2b', 'business', 'corporate', 'مؤسسات'] },
+  { id: 'premium', keys: ['فاخر', 'راقي', 'نخبة', 'vip', 'luxury', 'premium', 'elite'] },
+  { id: 'local', keys: ['حي', 'مدينة', 'محلي', 'local', 'قريب'] },
+]
+const GOALS = [
+  { id: 'sell', keys: ['بيع', 'متجر', 'شراء', 'اطلب', 'sell', 'shop', 'buy', 'order', 'store', 'whatsapp'] },
+  { id: 'book', keys: ['حجز', 'احجز', 'موعد', 'book', 'booking', 'appointment', 'reservation', 'reserve'] },
+  { id: 'leads', keys: ['تواصل', 'استشارة', 'اتصل', 'contact', 'leads', 'quote', 'عرض سعر'] },
+  { id: 'inform', keys: ['تعريفي', 'من نحن', 'معلومات', 'about', 'info', 'portfolio', 'اعمالنا', 'أعمالنا'] },
+  { id: 'teach', keys: ['تعليم', 'دورة', 'كورس', 'learn', 'course', 'academy', 'تدريب'] },
+]
+const MOODS = [
+  { id: 'luxury', keys: ['فاخر', 'راقي', 'ذهبي', 'اسود وذهبي', 'أسود وذهبي', 'luxury', 'premium', 'elegant', 'gold'] },
+  { id: 'playful', keys: ['مرح', 'ملون', 'مبهج', 'playful', 'fun', 'colorful', 'حيوي'] },
+  { id: 'calm', keys: ['هادئ', 'مطمئن', 'بسيط', 'calm', 'minimal', 'clean', 'نظيف'] },
+  { id: 'bold', keys: ['جريء', 'صاخب', 'قوي', 'bold', 'dark', 'داكن', 'نيون', 'neon', 'futuristic', 'مستقبلي'] },
+  { id: 'trust', keys: ['موثوق', 'طبي', 'رسمي', 'trust', 'professional', 'رصين'] },
+]
+
+function scoreKeys(request, list) {
+  const m = ' ' + normAr(request) + ' '
+  let best = null
+  let bestHits = 0
+  for (const item of list) {
+    let hits = 0
+    for (const k of item.keys) { if (m.includes(normAr(k))) hits += normAr(k).length > 4 ? 2 : 1 }
+    if (hits > bestHits) { bestHits = hits; best = item.id }
+  }
+  return bestHits > 0 ? best : null
+}
+
+/** مستويات الحركة والمؤثرات المسموحة لكل صناعة — نهاية "EPIC MODE لكل شيء" */
+const MOTION_PROFILE = {
+  restaurant: { level: 'balanced', allow: ['reveal', 'hover', 'counters', 'slider', 'marquee', 'preloader'], forbid: ['neonGlow', 'customCursor'] },
+  store: { level: 'balanced', allow: ['reveal', 'hover', 'slider', 'countdown', 'marquee'], forbid: ['neonGlow', 'customCursor', 'tilt3d'] },
+  agency: { level: 'rich', allow: ['reveal', 'hover', 'marquee', 'tilt3d', 'magnetic', 'preloader', 'counters', 'slider', 'accordion'], forbid: [] },
+  saas: { level: 'rich', allow: ['reveal', 'hover', 'parallax', 'counters', 'accordion', 'glowPulse', 'preloader'], forbid: ['neonGlow', 'customCursor'] },
+  clinic: { level: 'restrained', allow: ['reveal', 'hover', 'counters', 'slider'], forbid: ['neonGlow', 'tilt3d', 'marquee', 'customCursor', 'glass', 'parallax'] },
+  realestate: { level: 'balanced', allow: ['reveal', 'hover', 'parallax', 'counters', 'slider'], forbid: ['neonGlow', 'marquee', 'customCursor'] },
+  education: { level: 'balanced', allow: ['reveal', 'hover', 'counters', 'progress', 'accordion'], forbid: ['neonGlow', 'customCursor'] },
+  fitness: { level: 'rich', allow: ['reveal', 'hover', 'marquee', 'counters', 'glowPulse'], forbid: ['customCursor'] },
+  travel: { level: 'balanced', allow: ['reveal', 'hover', 'parallax', 'slider'], forbid: ['neonGlow', 'marquee', 'customCursor'] },
+  law: { level: 'restrained', allow: ['reveal', 'hover', 'counters'], forbid: ['neonGlow', 'tilt3d', 'marquee', 'customCursor', 'glass', 'parallax', 'preloader'] },
+  generic: { level: 'balanced', allow: ['reveal', 'hover', 'counters', 'accordion'], forbid: ['neonGlow', 'customCursor'] },
+}
+
+const MOTION_WORDS = {
+  restrained: 'مقيّدة هادئة: ظهور متدرج ناعم + hover خفيف + عداد ثقة واحد — بلا بهرجة',
+  balanced: 'متوازنة: reveal متدرج + hover + عنصران حيّان فقط مما يخدم الهدف',
+  rich: 'غنية سلسة: reveal متتابع + parallax/tilt + marquee + عدادات — كلها GPU (transform/opacity)',
+}
+
+/** صفحات ومزايا كل صناعة (للبـlueprint والفحص الوظيفي) */
+const INDUSTRY_BLUEPRINT = {
+  restaurant: { pages: ['/', '/menu', '/reserve', '/about', '/contact'], features: ['menu-list', 'dish-cards', 'reservation-form', 'location-hours', 'testimonials', 'contact'], goal: 'reserve' },
+  store: { pages: ['/', '/shop', '/product', '/about', '/contact'], features: ['product-grid', 'product-detail', 'category-filter', 'search', 'whatsapp-order', 'testimonials', 'faq'], goal: 'sell' },
+  agency: { pages: ['/', '/work', '/services', '/about', '/contact'], features: ['services-grid', 'portfolio-gallery', 'process-steps', 'stats', 'testimonials', 'contact-form'], goal: 'leads' },
+  saas: { pages: ['/', '/features', '/pricing', '/about', '/contact'], features: ['feature-grid', 'product-shot', 'how-it-works', 'stats', 'pricing', 'faq', 'cta'], goal: 'leads' },
+  clinic: { pages: ['/', '/services', '/doctors', '/booking', '/contact'], features: ['specialties', 'doctors', 'booking-form', 'testimonials', 'faq', 'emergency-bar'], goal: 'book' },
+  realestate: { pages: ['/', '/listings', '/neighborhoods', '/about', '/contact'], features: ['property-grid', 'property-cards', 'search-filter', 'stats', 'testimonials', 'contact-form'], goal: 'leads' },
+  education: { pages: ['/', '/courses', '/paths', '/about', '/contact'], features: ['course-grid', 'learning-paths', 'stats', 'testimonials', 'pricing', 'faq'], goal: 'teach' },
+  fitness: { pages: ['/', '/programs', '/trainers', '/pricing', '/contact'], features: ['program-cards', 'trainers', 'pricing', 'testimonials', 'trial-booking'], goal: 'book' },
+  travel: { pages: ['/', '/destinations', '/offers', '/about', '/contact'], features: ['destination-grid', 'offers', 'search-bar', 'testimonials', 'newsletter'], goal: 'book' },
+  law: { pages: ['/', '/practice', '/team', '/about', '/contact'], features: ['practice-areas', 'team', 'stats', 'testimonials', 'consult-form'], goal: 'leads' },
+  generic: { pages: ['/', '/about', '/contact'], features: ['features', 'about', 'testimonials', 'contact-form'], goal: 'inform' },
+}
+
+/** كاشف التعقيد: SIMPLE/MEDIUM/COMPLEX/APPLICATION */
+export function detectComplexity(request) {
+  const m = normAr(' ' + request + ' ')
+  const appKeys = ['لوحة تحكم', 'dashboard', 'تطبيق', 'app', 'حسابات', 'auth', 'تسجيل دخول', 'login', 'سلة', 'cart', 'دفع', 'payment', 'api', 'قاعدة بيانات', 'database', 'react', 'vue']
+  const multiKeys = ['صفحات', 'متعدد الصفحات', 'pages', 'multi-page', 'اقسام كثيرة', 'متجر', 'shop', 'store', 'ecommerce', 'دورات', 'courses', 'عقارات', 'listings']
+  const hasApp = appKeys.some((k) => m.includes(normAr(k)))
+  const hasMulti = multiKeys.some((k) => m.includes(normAr(k)))
+  if (hasApp) return 'APPLICATION'
+  if (hasMulti) return 'MEDIUM'
+  return 'SIMPLE'
+}
+
+/** مؤلف الـBlueprint: من طلب خام إلى مخطط منظم */
+export function composeBlueprint(request) {
+  const industry = detectIndustry(request)
+  const bp = INDUSTRY_BLUEPRINT[industry] || INDUSTRY_BLUEPRINT.generic
+  const audience = scoreKeys(request, AUDIENCES) || 'general'
+  const goal = scoreKeys(request, GOALS) || bp.goal
+  const mood = scoreKeys(request, MOODS) || null
+  const complexity = detectComplexity(request)
+  const ar = /[\u0600-\u06FF]/.test(String(request || ''))
+  const features = [...bp.features]
+  if (/whatsapp|واتس/.test(normAr(request)) && !features.includes('whatsapp-order')) features.push('whatsapp-order')
+  if (/faq|الاسئلة|الأسئلة/.test(normAr(request)) && !features.includes('faq')) features.push('faq')
+  const acceptanceCriteria = [
+    ...features.map((f) => ({ id: `feat:${f}`, kind: 'feature', label: `الميزة تعمل: ${f}`, critical: ['product-grid', 'menu-list', 'booking-form', 'reservation-form', 'contact-form', 'pricing'].includes(f) })),
+    { id: 'resp:mobile', kind: 'responsive', label: 'لا فيض أفقي على 360px', critical: true },
+    { id: 'resp:desktop', kind: 'responsive', label: 'سليم على 1440px', critical: true },
+    { id: 'tech:console', kind: 'technical', label: 'صفر أخطاء console', critical: true },
+    { id: 'tech:links', kind: 'technical', label: 'لا روابط ميتة', critical: true },
+    { id: 'content:real', kind: 'content', label: 'محتوى حقيقي بلا lorem/placeholder', critical: false },
+  ]
+  return {
+    projectType: industry === 'store' ? 'ecommerce' : complexity === 'SIMPLE' ? 'landing' : 'multi-page',
+    industry, audience, goal, mood, complexity,
+    language: ar ? 'ar' : 'en', direction: ar ? 'rtl' : 'ltr',
+    pages: complexity === 'SIMPLE' ? ['/'] : bp.pages,
+    features, acceptanceCriteria,
+    responsivePriority: 'mobile-first',
+  }
+}
+
+/**
  * يؤلف نظام تصميم أصليًا: يختار لوحة (بتدوير حسب الطلب حتى لا تتشابه المواقع)
  * ويبني كتلة مواصفات للمبرمج + قاعدة الجودة.
  */
@@ -218,8 +334,15 @@ export function composeDesignSystem(request) {
   const ind = industry === 'generic' ? GENERIC : INDUSTRIES[industry]
   const palette = ind.palettes[hashStr(request) % ind.palettes.length]
   const dark = !palette.light
+  const bp = composeBlueprint(request)
+  const prof = MOTION_PROFILE[industry] || MOTION_PROFILE.generic
+  const forbidTxt = prof.allow.length
+    ? `المسموح فقط: ${prof.allow.join('، ')} — الممنوع صراحةً لهذه الصناعة: ${prof.forbid.length ? prof.forbid.join('، ') : 'لا شيء محظور'} (سؤال التكيّف: هل يحتاج التصميم هذا المؤثر؟ إن لا، اتركه).`
+    : ''
   return {
     industry,
+    blueprint: bp,
+    motionProfile: prof,
     direction: ind.direction,
     palette,
     dark,
@@ -232,16 +355,20 @@ export function composeDesignSystem(request) {
     motion: ind.motion,
     promptBlock: `
 DESIGN SYSTEM — نظام تصميم أصلي مولّد لهذا المشروع (التزم به بدقة، ولا تنسخ أي موقع آخر):
-- الصناعة: ${industry} — الاتجاه: ${ind.direction}
+- الصناعة: ${industry} (جمهور: ${bp.audience} • هدف: ${bp.goal} • مزاج: ${bp.mood || 'تلقائي'} • تعقيد: ${bp.complexity} • ${bp.language === 'ar' ? 'عربي RTL' : 'إنجليزي LTR'})
 - اللوحة (استعمل هذه القيم حرفيًا): خلفية ${palette.bg} • سطح ${palette.surface} • أساسي ${palette.brand} • ثانوي ${palette.brand2} • نص ${palette.text} • خافت ${palette.muted}
 - الخطوط: ${ind.fonts.join(' + ')} من Google Fonts (عرض + متن).
+- نظام التباعد والحواف: حاوية max-width 1200px • مسافة أقسام 72-96px • بطاقات radius 16-20px • ظلال ناعمة طبقية • أزرار radius كامل/12px بحالة hover واضحة • تنقل sticky زجاجي.
 - الهيرو: ${ind.hero}
-- الأقسام بالترتيب: ${ind.sections.join(' ← ')}.
+- الأقسام بالترتيب (${bp.pages.length > 1 ? 'صفحات: ' + bp.pages.join('، ') : 'صفحة واحدة'}): ${ind.sections.join(' ← ')}.
 - الزخارف: ${ind.motifs}
-- الصور (Unsplash موضوعية + fallback متدرج): ${ind.imagery.join('، ')}.
-- الحركة: ${ind.motion}
-- الأصلية: صمم هوية لا تشبه أي قالب — توقيع واحد لا يُنسى (فاصل مميز/شارة دوارة/بطاقة متوهجة/مؤشر مخصص).
-- الممنوع: خلفية بيضاء فارغة + عنوان وفقرة وثلاث بطاقات وتذييل — هذا مرفوض ويُعاد بناؤه.`.trim(),
+- الصور (استراتيجية الأصول): أولوية لصور المستخدم إن وُجدت، ثم Unsplash موضوعية (${ind.imagery.join('، ')}) مع fallback متدرج لكل صورة — كل صورة تخدم قسمها، ممنوع صور زخرفية عشوائية.
+- الحركة (${prof.level}): ${MOTION_WORDS[prof.level]}
+${forbidTxt ? '- ' + forbidTxt : ''}
+- المحتوى: حقيقي ومنطقي (أسماء/أسعار/أوصاف واقعية) — ممنوع lorem ipsum و"Test Product" و"Welcome to our website" إلا بطلب صريح.
+- إتاحة الوصول: HTML دلالي + alt لكل صورة + تباين نص واضح + focus مرئي + احترام prefers-reduced-motion.
+- الأصلية: هوية لا تشبه أي قالب — توقيع واحد لا يُنسى.
+- الممنوع: خلفية فارغة + عنوان وفقرة وثلاث بطاقات وتذييل — مرفوض ويُعاد بناؤه.`.trim(),
   }
 }
 
@@ -266,4 +393,43 @@ export function genericTemplateFlags(html, css) {
     if (!hasMotion && h.length > 3000) flags.push({ label: 'صفحة ساكنة تمامًا — أضف حركة (reveal/hover/عدادات)', code: 'static-page' })
   }
   return flags
+}
+
+/**
+ * مكتبة المكونات (§6): بدائل قابلة للتجميع — ليست قالبًا واحدًا.
+ * كل مكون: بنية + عناصر إلزامية + محاور تخصيص. تُحقن حسب مزايا الـBlueprint فقط.
+ */
+const COMPONENTS = {
+  navbar: 'NAVBAR: شعار + روابط + CTA + جوال(هامبرغر يعمل) | خصص: زجاجي/صلب، شفاف فوق الهيرو',
+  hero: 'HERO: شارة + عنوان ضخم + وصف + CTA مزدوج + عنصر بصري (صورة/لوحة) + صف ثقة | خصص: مركزي/منقسم/ملء-شاشة',
+  feature_grid: 'FEATURE_GRID: 4-6 بطاقات (أيقونة SVG + عنوان + سطر) | خصص: شبكة/bento، hover يرفع',
+  product_grid: 'PRODUCT_GRID: شبكة + بطاقة(صورة+اسم+سعر+زر) + شارة خصم | خصص: أعمدة 2-4 حسب الشاشة',
+  menu_list: 'MENU_LIST: فئات + عناصر(اسم+وصف+سعر) + صور أطباق | خصص: تبويبات فئات',
+  testimonials: 'TESTIMONIALS: ≥2 (صورة رمزية+اسم+نص+نجوم) | خصص: سلايدر تلقائي/شبكة',
+  stats: 'STATS: 3-4 عدادات متحركة عند الظهور | خصص: شريط/شبكة',
+  gallery: 'GALLERY: شبكة صور متفاوتة + lightbox بسيط | خصص: bento/سلايدر',
+  pricing: 'PRICING: 3 خطط (وسطى مميزة) + أسعار + CTA | خصص: شهري/سنوي',
+  faq: 'FAQ: ≥4 أسئلة أكورديون يعمل بـJS | خصص: منقسم/كامل',
+  contact_form: 'CONTACT_FORM: اسم+تواصل+رسالة + تحقق + رسالة نجاح | خصص: بجانب معلومات',
+  booking_form: 'BOOKING_FORM: اسم+هاتف+تاريخ/وقت + تأكيد | خصص: خطوة واحدة',
+  consult_form: 'CONSULT_FORM: اسم+موضوع+وصف + تأكيد | خصص: منبثق/صفحة',
+  reservation_form: 'RESERVATION_FORM: اسم+عدد+تاريخ/وقت + تأكيد | خصص: شريط سريع',
+  search: 'SEARCH: حقل يرشّح العناصر حيًا بـJS | خصص: علوي/جانبي',
+  category_filter: 'CATEGORY_FILTER: أزرار/قوائم ترشّح الشبكة حيًا | خصص: تبويبات/قائمة',
+  whatsapp_order: 'WHATSAPP_ORDER: زر wa.me برقم + رسالة جاهزة باسم المنتج | خصص: عائم/داخل البطاقة',
+  product_detail: 'PRODUCT_DETAIL: صورة كبيرة+اسم+سعر+وصف+خصائص+زر طلب | خصص: قسم/صفحة',
+  cta: 'CTA: شريط ختامي (عنوان+زر) فوق صورة/تدرج | خصص: مدمج/منبثق',
+  footer: 'FOOTER: أعمدة(روابط+تواصل+اجتماعي) + حقوق | خصص: غني/مدمج',
+  auth: 'AUTH: نموذج دخول/تسجيل + تحقق + تخزين محلي | للتعقيد APPLICATION فقط',
+  dashboard: 'DASHBOARD: شريط جانبي + بطاقات + جدول | للتعقيد APPLICATION فقط',
+}
+
+export function componentBlock(features = []) {
+  const lines = []
+  for (const f of features) {
+    const key = String(f).toLowerCase().replace(/-/g, '_')
+    if (COMPONENTS[key]) lines.push(`- ${COMPONENTS[key]}`)
+  }
+  if (!lines.length) return ''
+  return `COMPONENTS — ابنِ كل ميزة بهذه المواصفات (قابلة للتخصيص حسب الهوية، لا تنسخ قالبًا جاهزًا):\n${lines.join('\n')}`
 }

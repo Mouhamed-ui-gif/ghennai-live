@@ -36,6 +36,46 @@ const PROVIDERS = {
   anthropic: { key: process.env.ANTHROPIC_API_KEY || '', model: process.env.ANTHROPIC_MODEL || 'claude-3-5-haiku-latest', tools: false },
 }
 
+/**
+ * بيانات القدرات لكل مزود (§9): coding وجودة الأدوات قبل السرعة الخام.
+ * quality/speed/reliability من 0-100 (تقديرات تشغيلية من سلوك المشروع الفعلي).
+ */
+const CAPS = {
+  groq120: { coding: 90, tools: true, vision: false, quality: 90, speed: 85, context: '128k', cost: 'free-tier', reliability: 55 },
+  openrouter: { coding: 80, tools: true, vision: false, quality: 78, speed: 70, context: 'varies', cost: 'pay', reliability: 80 },
+  openai: { coding: 85, tools: true, vision: true, quality: 85, speed: 70, context: '128k', cost: 'pay', reliability: 90 },
+  groq: { coding: 65, tools: true, vision: false, quality: 60, speed: 95, context: '8k', cost: 'free-tier', reliability: 55 },
+  moonshot: { coding: 75, tools: true, vision: true, quality: 78, speed: 65, context: '128k', cost: 'pay', reliability: 75 },
+  gemini: { coding: 80, tools: true, vision: true, quality: 82, speed: 80, context: '1M', cost: 'free-tier', reliability: 85 },
+  kimiLocal: { coding: 40, tools: false, vision: false, quality: 55, speed: 90, context: 'local', cost: 'free', reliability: 70 },
+  anthropic: { coding: 70, tools: false, vision: false, quality: 80, speed: 60, context: '200k', cost: 'pay', reliability: 85 },
+  ollama: { coding: 45, tools: true, vision: true, quality: 45, speed: 40, context: '8k', cost: 'free', reliability: 90 },
+}
+
+/** ترتيب الأدوار: البرمجة = الجودة وموثوقية الأدوات أولًا؛ الدردشة = السرعة؛ الرؤية = قدرة الرؤية */
+const ROLE_ORDER = {
+  coding: ['groq120', 'openrouter', 'openai', 'moonshot', 'gemini', 'groq', 'anthropic', 'kimiLocal'],
+  chat: ['groq', 'gemini', 'kimiLocal', 'openrouter', 'openai', 'groq120', 'moonshot', 'anthropic'],
+  vision: ['gemini', 'moonshot', 'openai', 'ollama'],
+  review: ['openai', 'gemini', 'openrouter', 'groq120', 'anthropic', 'groq'],
+  design: ['gemini', 'openai', 'openrouter', 'groq120', 'moonshot', 'groq'],
+}
+
+export function providerCaps(name) {
+  return CAPS[name] || null
+}
+
+/** مزودون مرتبون حسب الدور (coding/chat/vision/review/design) — من لديه مفتاح فقط */
+export function orderByRole(role, withToolsOnly = false) {
+  let ready = cloudProviders(withToolsOnly)
+  // الرؤية: فقط القادرون عليها (وollama عبر moondream يُعالج محليًا منفصلًا)
+  if (role === 'vision') ready = ready.filter(([name]) => CAPS[name]?.vision)
+  const order = ROLE_ORDER[role] || []
+  const byRole = order.map((n) => ready.find(([name]) => name === n)).filter(Boolean)
+  const rest = ready.filter(([name]) => !order.includes(name))
+  return [...byRole, ...rest]
+}
+
 /** الالتقاط: كل مزوّد يمكن أن يحمل نموذجًا مخصصًا للأدوات (X_TOOLS_MODEL) */
 for (const [name, p] of Object.entries(PROVIDERS)) {
   const tm = process.env[`${name.toUpperCase()}_TOOLS_MODEL`]
@@ -305,7 +345,7 @@ function usable(r, options) {
  */
 async function raceCloud(options, messages) {
   const withTools = !!(options.tools?.length)
-  const cands = priorityProviders(withTools)
+  const cands = options.role ? orderByRole(options.role, withTools) : priorityProviders(withTools)
   if (!cands.length) return null
   let lastErr = null
   for (const [name, p] of cands) {
@@ -478,7 +518,7 @@ async function streamChat(options, onToken, onDone) {
   const withTools = !!(options.tools?.length)
   const messages = normalizeMessages(options)
   const local = await ollamaIsAvailable()
-  const cands = priorityProviders(withTools)
+  const cands = options.role ? orderByRole(options.role, withTools) : priorityProviders(withTools)
   if (!cands.length) {
     if (local) return streamOllama(options, messages, onToken, onDone)
     return onDone?.({ ok: false, error: 'لا يوجد موفّر بث متاح' })
@@ -738,11 +778,13 @@ export async function* codestreamGen(options = {}) {
   let lastErr = null
 
   const wantLocalFirst = options.provider === 'ollama'
-  const cloudCands = priorityProviders(withTools)
-  const ordered = [
-    ...TOOL_STREAM_PRIORITY.map((n) => cloudCands.find(([name]) => name === n)).filter(Boolean),
-    ...cloudCands.filter(([name]) => !TOOL_STREAM_PRIORITY.includes(name)),
-  ]
+  const cloudCands = options.role ? orderByRole(options.role, withTools) : priorityProviders(withTools)
+  const ordered = options.role
+    ? cloudCands
+    : [
+      ...TOOL_STREAM_PRIORITY.map((n) => cloudCands.find(([name]) => name === n)).filter(Boolean),
+      ...cloudCands.filter(([name]) => !TOOL_STREAM_PRIORITY.includes(name)),
+    ]
 
   const tryChain = wantLocalFirst ? [null, ...(ordered.length ? ordered.map((o) => o) : [])] : [...ordered, null]
   for (const cand of tryChain) {

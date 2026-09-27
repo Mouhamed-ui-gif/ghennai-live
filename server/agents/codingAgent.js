@@ -11,7 +11,8 @@ import { seedTemplates } from '../lib/templateKit.js'
 import { repairUserSites, validateUserSite } from '../lib/siteDoctor.js'
 import { ensureProject, setProjectMeta, snapshotProject, listVersions, guessProjectRoot, siteRootFor } from '../lib/projects.js'
 import { ensureShare, publicUrl } from '../lib/share.js'
-import { composeDesignSystem, genericTemplateFlags } from './designEngine.js'
+import { composeDesignSystem, composeBlueprint, genericTemplateFlags, componentBlock } from './designEngine.js'
+import { beginBuild, transitionBuild, recordBuildTool, recordBuildValidation } from '../lib/buildStates.js'
 import { gateTool } from '../lib/approvalGate.js'
 import { gitRepoInfo } from '../lib/approvalGate.js'
 import * as procs from '../lib/processes.js'
@@ -106,6 +107,77 @@ function designQualityCheck(email, root) {
   // بوابة القالب العام: موقع "خلفية + عنوان + بطاقات + تذييل" مرفوض ويُعاد بناؤه
   flags.push(...genericTemplateFlags(html, css))
   return flags
+}
+
+/**
+ * بوابة المتصفح (§12/§19/§20/§37): فحص حقيقي + معايير قبول + حكم نهائي.
+ * تُرجع { verdict: COMPLETED|NEEDS_REPAIR|FAILED|SKIPPED, repairPrompt, message, qa, criteria }.
+ * ميزانية الإصلاح تُدار خارجيًا (qaFixes) — هنا فحص واحد فقط.
+ */
+async function* runBrowserGate(user, root, blueprint) {
+  const ws = userWorkspace(user.email)
+  let dir = ws
+  try {
+    const base = String(root || '.').replace(/\/+$/, '')
+    dir = base && base !== '.' ? path.resolve(ws, base) : ws
+  } catch { /* noop */ }
+  transitionBuild(user.email, root, 'TESTING')
+  yield { type: 'agent', agent: 'Coding', message: '🧪 فحص المتصفح الحقيقي: كونسول + شبكة + استجابة + لقطات…', status: 'running' }
+  let qa = null
+  try {
+    const mod = await import('../lib/browserQA.js')
+    qa = await mod.qaStaticDir(dir)
+  } catch (e) {
+    return { verdict: 'SKIPPED', repairPrompt: null, message: '', qa: null, criteria: [], reason: String(e?.message || e).slice(0, 200) }
+  }
+  if (!qa || !qa.checks) {
+    return { verdict: 'SKIPPED', repairPrompt: null, message: '', qa, criteria: [], reason: 'no qa result' }
+  }
+  recordBuildValidation(user.email, root, 'browserQA', qa.checks)
+  const passN = qa.checks.filter((c) => c.ok).length
+  yield {
+    type: 'qa_report', project: root || '.',
+    ok: qa.ok, pass: passN, fail: qa.checks.length - passN,
+    shots: !!(qa.shots && (qa.shots.desktop || qa.shots.mobile)),
+    consoleErrors: qa.consoleErrors || [],
+  }
+  transitionBuild(user.email, root, 'VISUAL_REVIEW')
+  const { evaluateAcceptance, finalGate } = await import('../lib/browserQA.js')
+  const criteria = evaluateAcceptance(blueprint, qa)
+  let visualFlags = []
+  try { visualFlags = designQualityCheck(user.email, root).map((f) => ({ ...f, ok: false })) } catch { /* noop */ }
+  const gate = finalGate({ siteChecks: qa.checks, criteria, visualFlags, dir })
+  const critFails = [
+    ...gate.gates.technical.items, ...gate.gates.functional.items,
+    ...gate.gates.responsive.items.filter((c) => c.severity === 'critical'),
+    ...gate.gates.security.items,
+  ]
+  if (gate.verdict === 'COMPLETED') {
+    return { verdict: 'COMPLETED', repairPrompt: null, message: '', qa, criteria, gate }
+  }
+  // mustFix: الحرجة أو القالب العام فقط — الملاحظات الثانوية تُذكر ولا تستهلك دورة إصلاح
+  const mustFix = critFails.length > 0 || visualFlags.some((f) => f.code === 'generic-template')
+  // تشخيص موجّه للإصلاح (§16): أسباب جذرية لا قائمة خام
+  let diagTxt = ''
+  try {
+    const { diagnose } = await import('../lib/diagnoser.js')
+    const qaFails = qa.checks.filter((c) => !c.ok).map((c) => ({ ok: false, label: `${c.label}${c.detail ? ` — ${c.detail}` : ''}`, file: 'index.html', code: c.id.startsWith('resp:') ? 'responsive' : undefined }))
+    const diags = diagnose(user.email, root, qaFails, [])
+    if (diags.length) diagTxt = diags.map((d, n) => `${n + 1}. [${d.severity}] ${d.file}: ${d.issue}\n   السبب: ${d.rootCause}\n   الإصلاح: ${d.fix}`).join('\n')
+  } catch { /* noop */ }
+  const critTxt = critFails.map((c) => `• ${c.label || c.id}`).join('\n')
+  const repairPrompt = `BROWSER QA FOUND REAL PROBLEMS — fix them precisely in the actual files, then re-verify:\n${diagTxt || critTxt}\nRules: readFile first, fix minimally, keep design system, re-check 360px after layout fixes.`
+  const message = gate.verdict === 'FAILED'
+    ? `❌ فشل البوابة النهائية — مشاكل حرجة:\n${critTxt}\n\nالملفات محفوظة كما هي. اضغط 🔧 «إصلاح تلقائي» أو أعد الصياغة.`
+    : ''
+  return { verdict: gate.verdict, mustFix, repairPrompt: mustFix ? repairPrompt : null, message, qa, criteria, gate }
+}
+
+/** صقل تكيفي (§14-15): يصلح المشكلة المحددة فقط، بالمؤثرات المسموحة للصناعة — لا "أضف كل شيء" */
+function adaptivePolishPrompt(list, motionProfile) {
+  const prof = motionProfile || { level: 'balanced', allow: ['reveal', 'hover', 'counters'], forbid: [] }
+  const forbid = prof.forbid.length ? `\nFORBIDDEN for this industry (do NOT add even if generic advice suggests): ${prof.forbid.join(', ')}.` : ''
+  return `DESIGN POLISH PASS (adaptive, motion level: ${prof.level}) — address ONLY the issues below in the actual files (readFile → edit CSS/HTML). Keep palette coherent (2-3 brand colors + neutrals), keep everything working, keep it RTL-correct.\nTargeted issues to fix:\n${list}\nAllowed effects for this design: ${prof.allow.join(', ')}.${forbid}\nAlso: one signature touch fitting THIS industry, real theme photos with gradient fallbacks, and a real Google-Fonts Arabic font for Arabic sites.`.trim()
 }
 
 const EDIT_SYSTEM_PROMPT = (element, userMessage) => `You are GHENNAI's Coding Agent in EDIT MODE — a precise surgeon for the user's live website. The user clicked an element in their preview and asked for a targeted change.
@@ -696,6 +768,10 @@ async function* runCoding(user, userMessage, opts = {}) {
   const memory = editMode || proposeMode ? '' : contextBlock(user.email, userMessage)
   const messages = []
   let workingRoot = '.'
+  // نطاق الدالة: النظام والبلوبرنت والحركة تُستخدم في حلقات الصقل اللاحقة
+  let designSystem = ''
+  let blueprint = null
+  let motionProfile = null
   if (editMode || proposeMode) {
     if (opts.root) workingRoot = guessProjectRoot(ws, opts.root) || '.'
     yield { type: 'coding_start', project: detectProjectName(userMessage), request: userMessage, mode: proposeMode ? 'propose' : 'edit', element: opts.element || null, root: opts.root || null }
@@ -716,10 +792,22 @@ async function* runCoding(user, userMessage, opts = {}) {
       ? `\n\nDESIGN SPEC — خطة المعمار المصغّرة (التزم بها ما أمكن):\n- لوحة الألوان المقترحة: ${Array.isArray(design.palette) ? (design.palette.join(' ') || '—') : '—'}\n- الحزمة التقنية: ${design.stack || 'html/css/js'}\n- الخطوات:${Array.isArray(design.steps) && design.steps.length ? `\n${design.steps.map((s) => `  • ${s}`).join('\n')}` : ' تنفيذ مباشر'}\n- لا تنسَ لمسةً توقيعيةً واحدة تميّز الموقع (motif مميز)، وخطوط عربية احترافية إن كان المحتوى عربيًا.`
       : ''
     // محرك التصميم: نظام أصلي مولّد حسب الصناعة — يُحقن في كل بناء دردشة كان أو معالجًا
-    let designSystem = ''
+    // + مخطط Blueprint منظم (§4) يُرسل للمبرمج بدل الطلب الخام
     try {
       const ds = composeDesignSystem(userMessage)
+      blueprint = ds.blueprint
+      motionProfile = ds.motionProfile || null
       designSystem = '\n\n' + ds.promptBlock
+      if (blueprint && (blueprint.pages.length > 1 || blueprint.features.length > 4)) {
+        designSystem += `\n- BLUEPRINT: صفحات [${blueprint.pages.join('، ')}] • مزايا [${blueprint.features.join('، ')}] • تعقيد ${blueprint.complexity} • أولوية ${blueprint.responsivePriority}`
+        if (blueprint.complexity === 'MEDIUM') designSystem += ' • ابنِ صفحات HTML حقيقية منفصلة (لا أقسام بديلة)'
+        if (blueprint.complexity === 'APPLICATION') designSystem += ' • تطبيق حقيقي: ملفات منظمة + حالة + نماذج تعمل (لا واجهة ساكنة)'
+        const compBlock = componentBlock(blueprint.features)
+        if (compBlock) designSystem += `\n- ${compBlock}`
+      }
+      beginBuild(user.email, projectRoot, blueprint)
+      transitionBuild(user.email, projectRoot, 'DESIGNING')
+      transitionBuild(user.email, projectRoot, 'SCAFFOLDING')
       emitUser(user.email, { type: 'agent', agent: 'Design', message: `🎨 نظام التصميم (${ds.industry}): ${ds.direction.slice(0, 90)}`, status: 'running' })
     } catch { /* البناء يستمر بدون النظام */ }
     messages.push(
@@ -743,6 +831,11 @@ async function* runCoding(user, userMessage, opts = {}) {
   // ميزانية صقل مستقلة: إصلاحات التحقق لا تأكل جولات الجمال — الموقع العاري يُصقل دائمًا
   let polishRounds = 0
   const MAX_POLISH_ROUNDS = 2
+  // ميزانية إصلاح بوابة المتصفح (§21): محاولة موجّهة واحدة ثم حكم صريح
+  let qaFixes = 0
+  const MAX_QA_FIXES = 1
+  // حارس ما قبل الإصلاح (§22): لقطة version 0 + عدد الفشل للمقارنة
+  let repairGuard = null
   let writesHappened = false
 
   const consumeTurn = async function* (msgs) {
@@ -767,8 +860,14 @@ async function* runCoding(user, userMessage, opts = {}) {
       }
       return msgs
     }
-    for await (const ev of codestreamGen({ messages: body(), tools: TOOL_SCHEMAS, provider: 'auto', signal: canc })) {
-      if (ev.kind === 'done') { result = ev.result; continue }
+    for await (const ev of codestreamGen({ messages: body(), tools: TOOL_SCHEMAS, provider: 'auto', role: 'coding', signal: canc })) {
+      if (ev.kind === 'done') {
+        result = ev.result
+        if (!editMode && !proposeMode && ev.result) {
+          transitionBuild(user.email, workingRoot, 'BUILDING', { provider: ev.result.provider || null, model: ev.result.model || null })
+        }
+        continue
+      }
       if (ev.kind === 'text') {
         live = true
         yield { type: 'stream_chunk', content: ev.text }
@@ -791,11 +890,25 @@ async function* runCoding(user, userMessage, opts = {}) {
   const goodFiles = new Map()
   const executeToolCalls = async function* (msgs, toolCalls) {
     let allOk = true
+    // تتبع البناء: أول عملية ملفات تنقل الحالة إلى BUILDING
+    const trackingRoot = (!editMode && !proposeMode) ? workingRoot : null
+    let buildingMarked = false
     for (const tc of toolCalls) {
       let name = tc?.function?.name
       let args = tc?.function?.arguments
       if (typeof args === 'string') {
         try { args = JSON.parse(args) } catch { args = {} }
+      }
+      if (trackingRoot && name && typeof args?.path === 'string') {
+        recordBuildTool(user.email, trackingRoot, name, args.path)
+        if (!buildingMarked && ['writeFile', 'replaceInFile', 'appendFile', 'copyFile', 'moveFile'].includes(name)) {
+          buildingMarked = true
+          transitionBuild(user.email, trackingRoot, 'BUILDING')
+        }
+        // أول index.html → المعاينة الحية تعمل فعلًا عبر رابط المشاركة (§36)
+        if (name === 'writeFile' && /(^|\/)index\.html?$/i.test(args.path)) {
+          transitionBuild(user.email, trackingRoot, 'RUNNING')
+        }
       }
       if ((editMode || proposeMode) && typeof args?.path === 'string' && workingRoot && workingRoot !== '.') {
         const bare = workingRoot.replace(/\/+$/, '')
@@ -927,15 +1040,45 @@ async function* runCoding(user, userMessage, opts = {}) {
       const root = workingRoot
       let checks = []
       if (!editMode) {
+        transitionBuild(user.email, root, 'TESTING')
         checks = validateUserSite(user.email, root)
+        recordBuildValidation(user.email, root, 'siteDoctor', checks)
         yield { type: 'validation_report', project: root || '.', ok: checks.every((c) => c.ok), checks: checks.slice(0, 40) }
         const failing = checks.filter((c) => !c.ok)
+        // حارس الإصلاح (§22): إن زاد الفشل بعد الجولة رُجع للقطة ما قبل الإصلاح
+        if (!editMode && repairGuard) {
+          try {
+            if (failing.length > repairGuard.fails) {
+              const { restoreVersion } = await import('../lib/projects.js')
+              restoreVersion(user.email, root, 0)
+              yield { type: 'agent', agent: 'Coding', message: `↩️ الإصلاح زاد المشاكل (${repairGuard.fails}→${failing.length}) — رُجع للنسخة الجيدة وسأجرب منحنى مختلفًا`, status: 'running' }
+              checks = validateUserSite(user.email, root)
+            }
+          } catch { /* المتابعة بدون استرجاع */ }
+          repairGuard = null
+        }
         if (failing.length && fixRounds < MAX_FIX_ROUNDS) {
           fixRounds++
           built = true
+          transitionBuild(user.email, root, 'REPAIRING', { retry: true })
           yield { type: 'agent', agent: 'Coding', message: `الفحص رصد ${failing.length} مشكلة — يعالجها تلقائيًا (جولة ${fixRounds}/${MAX_FIX_ROUNDS})…`, status: 'running' }
-          const list = failing.map((c, n) => `${n + 1}. [${c.file || 'site'}] ${c.label}`).join('\n')
-          messages.push({ role: 'system', content: `VALIDATION REPORT — these are the REAL problems in the current project files:\n${list}\nFix each one in its actual file now: readFile the file, correct it (writeFile/replaceInFile), and re-verify. Do not claim fixes that are not actually applied.` })
+          // المشخّص: سبب جذري + ملف + إصلاح موصى به لكل مشكلة (§16)
+          let diagTxt = ''
+          try {
+            const { diagnose } = await import('../lib/diagnoser.js')
+            const diags = diagnose(user.email, root, failing, [])
+            if (diags.length) {
+              diagTxt = diags.map((d, n) => `${n + 1}. [${d.severity}] ${d.file}: ${d.issue}\n   السبب: ${d.rootCause}\n   الإصلاح: ${d.fix}`).join('\n')
+              yield { type: 'agent', agent: 'Coding', message: `🔍 التشخيص: ${diags[0].issue.slice(0, 100)} (${diags[0].severity})`, status: 'running' }
+            }
+          } catch { /* fallback أدناه */ }
+          const list = diagTxt || failing.map((c, n) => `${n + 1}. [${c.file || 'site'}] ${c.label}`).join('\n')
+          try {
+            const { snapshotProject } = await import('../lib/projects.js')
+            snapshotProject(user.email, root, 0)
+            repairGuard = { fails: failing.length }
+          } catch { repairGuard = null }
+          messages.push({ role: 'system', content: `DIAGNOSIS REPORT — root causes with recommended fixes (follow them precisely):\n${list}\nFix each one in its actual file now: readFile the file, correct it (writeFile/replaceInFile), and re-verify. Do not claim fixes that are not actually applied.` })
           messages.push({ role: 'user', content: 'أصلح كل المشاكل المذكورة أعلاه في ملفاتها الحقيقية الآن، وتأكد أنها أُصلحت فعليًا، ثم أعد الملخص النهائي.' })
           if (messages.length > 40) messages.splice(4, messages.length - 36)
           continue
@@ -946,11 +1089,12 @@ async function* runCoding(user, userMessage, opts = {}) {
           if (styleFlags.length >= 1) {
             polishRounds++
             built = true
+            transitionBuild(user.email, root, 'REPAIRING')
             yield { type: 'agent', agent: 'Coding', message: `اللمسة الأخيرة: رفع الحس الجمالي (جولة ${polishRounds}/${MAX_POLISH_ROUNDS})…`, status: 'running' }
             const list = styleFlags.map((c, n) => `${n + 1}. ${c.label}`).join('\n')
             messages.push({
               role: 'system',
-              content: `DESIGN POLISH PASS — the site currently looks generic/average. Elevate it to a premium, memorable look by addressing EVERY point below in the actual files (readFile → edit CSS/HTML). Keep the palette coherent (2-3 brand colors + neutrals), keep everything working, keep it RTL-correct.\nImprovements to apply:\n${list}\nAlso ensure at least one signature creative touch (gradient logo, glowing gradient-border cards, diagonal divider, marquee, rotating badge, floating decoration…), real theme photos with gradient fallbacks, 3D depth (tilt/parallax), a preloader, lively elements (counters/slider/accordion), and a real Google-Fonts Arabic font for Arabic sites.`,
+              content: adaptivePolishPrompt(list, motionProfile),
             })
             messages.push({ role: 'user', content: 'طبّق تحسينات اللمسة الجمالية أعلاه على ملفاتك الحقيقية الآن، وتأكد أن التغييرات فعلاً على القرص، ثم أعد الملخص النهائي.' })
             if (messages.length > 40) messages.splice(4, messages.length - 36)
@@ -961,14 +1105,35 @@ async function* runCoding(user, userMessage, opts = {}) {
 
       // ── التحقق النهائي الصادق: ممنوع إعلان النجاح على ملف مدمّر/ناقص ──
       if (!editMode && !proposeMode) {
+        transitionBuild(user.email, root, 'FINAL_VERIFY')
         const v = verifySiteBuilt(user.email, root)
         if (!v.ok) {
+          transitionBuild(user.email, root, 'FAILED', { error: v.reason })
           yield { type: 'agent', agent: 'Coding', message: `❌ فشل التحقق النهائي: ${v.reason}`, status: 'error' }
           yield { type: 'code_token', action: 'done' }
           const failMsg = `❌ لم يكتمل البناء — ${v.reason}.\n\nالملفات المكتوبة محفوظة في مساحة العمل كما هي. اضغط 🔧 «إصلاح تلقائي» لمحاولة التشخيص والإصلاح، أو أعد صياغة طلبك.`
           yield { type: 'coding_done', built: false, content: failMsg }
           yield { type: 'answer', content: failMsg }
           return
+        }
+        // ── بوابة المتصفح + القبول (§12/§19/§20/§37): فحص حقيقي قبل النشر ──
+        const gate = yield* runBrowserGate(user, root, blueprint)
+        if (gate.verdict === 'SKIPPED') {
+          yield { type: 'agent', agent: 'Coding', message: `⚠️ تعذّر فحص المتصفح (${gate.reason || 'غير متاح'}) — المتابعة بالفحوصات الأساسية فقط`, status: 'running' }
+        } else if (gate.verdict === 'FAILED') {
+          transitionBuild(user.email, root, 'FAILED', { error: 'final gate' })
+          yield { type: 'code_token', action: 'done' }
+          yield { type: 'coding_done', built: false, content: gate.message }
+          yield { type: 'answer', content: gate.message }
+          return
+        } else if (gate.verdict === 'NEEDS_REPAIR' && gate.mustFix && gate.repairPrompt && qaFixes < MAX_QA_FIXES) {
+          qaFixes++
+          transitionBuild(user.email, root, 'REPAIRING', { retry: true })
+          yield { type: 'agent', agent: 'Coding', message: `🔧 إصلاح موجّه من فحص المتصفح (محاولة ${qaFixes}/${MAX_QA_FIXES})…`, status: 'running' }
+          messages.push({ role: 'system', content: gate.repairPrompt })
+          messages.push({ role: 'user', content: 'طبّق الإصلاحات أعلاه على ملفاتك الحقيقية الآن ثم أعد الملخص النهائي.' })
+          if (messages.length > 40) messages.splice(4, messages.length - 36)
+          continue
         }
       }
 
@@ -1007,6 +1172,7 @@ async function* runCoding(user, userMessage, opts = {}) {
         }
       }
       yield { type: 'code_token', action: 'done' }
+      if (!editMode && !proposeMode) transitionBuild(user.email, workingRoot, (built || attempts > 0) && fullLink ? 'COMPLETED' : 'FAILED')
       yield { type: 'coding_done', built: built || attempts > 0, content: withLink, version: nextVersion, url: fullLink }
       yield { type: 'answer', content: withLink || 'انتهت المهمة.' }
       rememberProject(user.email, 'last', { summary: String(summary).slice(0, 400), ts: Date.now() })
@@ -1031,11 +1197,12 @@ async function* runCoding(user, userMessage, opts = {}) {
       const styleFlags = designQualityCheck(user.email, workingRoot)
       if (styleFlags.length >= 1) {
         polishRounds++
+        transitionBuild(user.email, workingRoot, 'REPAIRING')
         yield { type: 'agent', agent: 'Coding', message: `اللمسة الأخيرة: رفع الحس الجمالي (جولة ${polishRounds}/${MAX_POLISH_ROUNDS})…`, status: 'running' }
         const list = styleFlags.map((c, n) => `${n + 1}. ${c.label}`).join('\n')
         messages.push({
           role: 'system',
-          content: `DESIGN POLISH PASS — the site currently looks generic/average. Elevate it to a premium, memorable look by addressing EVERY point below in the actual files (readFile → edit CSS/HTML). Keep the palette coherent (2-3 brand colors + neutrals), keep everything working, keep it RTL-correct.\nImprovements to apply:\n${list}\nAlso ensure at least one signature creative touch (gradient logo, glowing gradient-border cards, diagonal divider, marquee, rotating badge, floating decoration…), real theme photos with gradient fallbacks, 3D depth (tilt/parallax), a preloader, lively elements (counters/slider/accordion), and a real Google-Fonts Arabic font for Arabic sites.`,
+          content: adaptivePolishPrompt(list, motionProfile),
         })
         messages.push({ role: 'user', content: 'طبّق تحسينات اللمسة الجمالية أعلاه على ملفاتك الحقيقية الآن، وتأكد أن التغييرات فعلاً على القرص، ثم أعد الملخص النهائي.' })
         try {
@@ -1050,6 +1217,7 @@ async function* runCoding(user, userMessage, opts = {}) {
     const vTail = !editMode && !proposeMode ? verifySiteBuilt(user.email, workingRoot) : { ok: true }
     if (!vTail.ok) {
       const failMsg = `❌ لم يكتمل البناء — ${vTail.reason}.\n\nاضغط 🔧 «إصلاح تلقائي» لمحاولة التشخيص والإصلاح، أو أعد المحاولة.`
+      if (!editMode && !proposeMode) transitionBuild(user.email, workingRoot, 'FAILED', { error: vTail.reason })
       yield { type: 'coding_done', built: false, content: failMsg }
       yield { type: 'agent', agent: 'Coding', message: failMsg, status: 'error' }
       yield { type: 'answer', content: failMsg }
@@ -1065,6 +1233,7 @@ async function* runCoding(user, userMessage, opts = {}) {
       } catch { /* البث اختياري */ }
     }
     const msg = `اكتمل بناء الموقع — تحقق من المعاينة الحية، ويمكنك طلب أي تعديل بعدها.${tailLink ? `\n\n🚀 **موقعك حي الآن:**\n[افتح موقعك المباشر 🚀](${tailLink})\n${tailLink}` : ''}`
+    if (!editMode && !proposeMode) transitionBuild(user.email, workingRoot, tailLink ? 'COMPLETED' : 'FAILED')
     yield { type: 'coding_done', built, content: msg, url: tailLink }
     yield { type: 'agent', agent: 'Coding', message: tailLink ? `اكتمل البناء — الموقع حي: ${tailLink}` : msg, status: 'success' }
     yield { type: 'answer', content: msg }

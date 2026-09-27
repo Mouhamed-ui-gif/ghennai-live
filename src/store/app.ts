@@ -210,6 +210,10 @@ interface AppState {
   setRailOpen: (b: boolean) => void
   /** جلسة لوح نشطة (بناء جارٍ أو منتهٍ حديثًا) + اكتماله */
   railSession: boolean
+  /** مراحل البناء العشر الحقيقية (من آلة الحالة — لا نسب وهمية) */
+  buildStages: { id: string; label: string; status: 'idle' | 'active' | 'done' | 'failed' }[]
+  buildState: string
+  setBuildStages: (stages: AppState['buildStages'], state: string) => void
   railDone: boolean
   setRailSession: (b: boolean) => void
   setRailDone: (b: boolean) => void
@@ -426,6 +430,9 @@ export const useApp = create<AppState>((set, get) => ({
   setRailOpen: (b) => set({ railOpen: b }),
   railSession: false,
   railDone: false,
+  buildStages: [],
+  buildState: 'IDLE',
+  setBuildStages: (stages, state) => set({ buildStages: stages, buildState: state }),
   setRailSession: (b) => set({ railSession: b }),
   setRailDone: (b) => set({ railDone: b }),
   resetLive: () => set({ liveFiles: {}, codeFiles: [], activeCodeFile: null, codeFileContent: null }),

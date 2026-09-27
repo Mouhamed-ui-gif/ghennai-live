@@ -35,6 +35,7 @@ export function CodeRail() {
   const codeFileContent = useApp((s) => s.codeFileContent)
   const busy = useApp((s) => s.busy)
   const railDone = useApp((s) => s.railDone)
+  const buildStages = useApp((s) => s.buildStages)
   const setRailOpen = useApp((s) => s.setRailOpen)
 
   const [shown, setShown] = useState<Record<string, string>>({})
@@ -111,8 +112,27 @@ export function CodeRail() {
           </button>
         </div>
       </div>
-      {files.length > 0 && (
-        <div className="flex items-center gap-1 overflow-x-auto border-b border-white/5 px-1.5 py-1">
+      {/* مراحل البناء الحقيقية (§34): نقاط مشتقة من آلة الحالة — لا نسب وهمية */}
+      {buildStages.length > 0 && (
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-white/5 px-2 py-1" dir="rtl" data-testid="build-stages">
+          {buildStages.map((s) => (
+            <span
+              key={s.id}
+              title={s.label}
+              className={`flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] ${
+                s.status === 'done' ? 'bg-emerald-500/15 text-emerald-300'
+                : s.status === 'active' ? 'bg-cyan-500/15 text-cyan-200'
+                : s.status === 'failed' ? 'bg-red-500/15 text-red-300'
+                : 'text-slate-600'
+              }`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${s.status === 'done' ? 'bg-emerald-400' : s.status === 'active' ? 'animate-pulse bg-cyan-400' : s.status === 'failed' ? 'bg-red-400' : 'bg-slate-700'}`} />
+              {s.label}
+            </span>
+          ))}
+        </div>
+      )}
+      {files.length > 0 && (        <div className="flex items-center gap-1 overflow-x-auto border-b border-white/5 px-1.5 py-1">
           {files.map((f) => (
             <button
               key={f}

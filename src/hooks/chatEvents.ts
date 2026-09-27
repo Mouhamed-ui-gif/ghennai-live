@@ -260,6 +260,27 @@ export function handleChatEvent(e: SSEvent): void {
       }
       break
     }
+    case 'build_stage': {
+      // مراحل البناء الحقيقية من آلة الحالة — تُعرض كنقاط إنجاز لا كنسبة وهمية
+      const ev = e as unknown as { root?: string; state?: string; stages?: { id: string; label: string; status: 'idle' | 'active' | 'done' | 'failed' }[] }
+      const st = useApp.getState()
+      if (Array.isArray(ev.stages)) {
+        st.setBuildStages(ev.stages, ev.state || '')
+        const active = ev.stages.find((s) => s.status === 'active')
+        if (active) st.pushActivity({ agent: 'Coding', message: `✓ ${active.label}…`, status: 'running' })
+        if (ev.state === 'COMPLETED') st.pushActivity({ agent: 'Coding', message: '✓ الموقع جاهز — كل البوابات خضراء', status: 'success' })
+        if (ev.state === 'FAILED') st.pushActivity({ agent: 'Coding', message: '✗ فشل البناء — راجع السبب المعلن', status: 'error' })
+      }
+      break
+    }
+    case 'qa_report': {
+      const ev = e as unknown as { pass?: number; fail?: number; ok?: boolean; shots?: boolean; consoleErrors?: string[] }
+      const st = useApp.getState()
+      st.pushCodeAction({ kind: ev.ok ? 'ok' : 'info', text: ev.ok ? `فحص المتصفح: ${ev.pass} ناجح ✓${ev.shots ? ' + لقطتان' : ''}` : `فحص المتصفح: ${ev.fail} مشكلة — تُشخَّص وتُصلح` })
+      st.pushActivity({ agent: 'QA', message: ev.ok ? `🧪 المتصفح: ${ev.pass} ✓ بلا حرجة` : `🧪 المتصفح: ${ev.fail} تحتاج إصلاحًا`, status: ev.ok ? 'success' : 'running' })
+      if (ev.consoleErrors?.length) st.pushTerm({ kind: 'err', text: `console: ${ev.consoleErrors[0]}\n` })
+      break
+    }
     case 'approval_requested': {
       const ev = e as unknown as { id: number; tool?: string; command?: string; cwd?: string; path?: string; reason?: string; kind?: string }
       const st = useApp.getState()

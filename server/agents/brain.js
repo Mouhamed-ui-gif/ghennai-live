@@ -274,9 +274,9 @@ async function textAgent(email, agent, system, userMessage, toolsDef = null, ext
     { role: 'user', content: userMessage + IDENTITY_NOTE },
   ]
   if (toolsDef) {
-    return generate({ messages, tools: toolsDef, model: modelFor(email, agent) || undefined, numCtx: 4096 })
+    return generate({ messages, tools: toolsDef, model: modelFor(email, agent) || undefined, numCtx: 4096, role: 'coding' })
   }
-  return generate({ messages, model: modelFor(email, agent) || undefined, numCtx: 4096 })
+  return generate({ messages, model: modelFor(email, agent) || undefined, numCtx: 4096, role: agent === 'Design' ? 'design' : 'chat' })
 }
 
 /** ═══════════ منظّم كل وكيل ═══════════ */
@@ -355,7 +355,7 @@ function textAgentStream(email, agent, system, userMessage, onToken) {
   ]
   return new Promise((resolve, reject) => {
     streamChat(
-      { messages, model: modelFor(email, agent) || 'qwen2.5:3b', numCtx: 4096 },
+      { messages, model: modelFor(email, agent) || 'qwen2.5:3b', numCtx: 4096, role: agent === 'Design' ? 'design' : 'chat' },
       onToken,
       (done) => {
         if (done?.ok) resolve({ content: done.content || '', provider: done.provider || '' })
@@ -512,7 +512,7 @@ async function runTooledAgent(user, agentName, system, userMessage, toolsDef, to
   ]
   let res
   for (let i = 0; i < 3; i++) {
-    res = await generate({ messages, tools: toolsDef, model: modelFor(user.email, agentName) || undefined, numCtx: 4096 })
+    res = await generate({ messages, tools: toolsDef, model: modelFor(user.email, agentName) || undefined, numCtx: 4096, role: 'coding' })
     const calls = res.toolCalls || []
     if (!calls.length) return res
     messages.push({ role: 'assistant', content: res.content || '', tool_calls: calls })
@@ -550,6 +550,7 @@ Respond ONLY with JSON: {"score":7,"feedback":"...","verdict":"good"|"revise"}` 
     model: modelFor(user.email, 'Core') || 'qwen2.5:3b',
     numCtx: 2048,
     temperature: 0.2,
+    role: 'review',
   })
   const m = res.content.match(/\{[\s\S]*\}/)
   let g = { score: 5, feedback: '', verdict: 'good' }
