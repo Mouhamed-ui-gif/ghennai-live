@@ -68,7 +68,8 @@ async function ollamaVision(base64, prompt) {
       options: { num_ctx: 4096, temperature: 0.2 },
       keep_alive: '20m',
     }),
-    signal: AbortSignal.timeout(120000),
+    // النموذج البارد قد يحتاج دقائق للتحميل — نبض SSE يبقي العميل حيًا
+    signal: AbortSignal.timeout(300000),
   })
   if (!resOllama.ok) {
     const txt = await resOllama.text()
@@ -112,17 +113,29 @@ router.post('/', requireAuth, async (req, res) => {
     let text = ''
     let via = ''
     if (wantCloud) {
-      try {
-        text = await geminiVision(base64, mime, prompt)
-        via = `gemini/${GEMINI_MODEL}`
-      } catch (cloudErr) {
+      // محاولتان سحابيتان (الثانية بعد 8s للأخطاء العابرة 429/503) ثم السقوط للمحلي
+      let cloudErr = null
+      for (let attempt = 0; attempt < 2 && !text; attempt++) {
+        if (attempt === 1) {
+          emitUser(req.user.email, { type: 'agent_event', agent: 'Vision', message: `⏳ السحابة مثقلة — إعادة المحاولة…`, status: 'running' })
+          await new Promise((r) => setTimeout(r, 8000))
+        }
+        try {
+          text = await geminiVision(base64, mime, prompt)
+          via = `gemini/${GEMINI_MODEL}`
+        } catch (e) {
+          cloudErr = e
+          console.error(`[VISION] cloud attempt ${attempt + 1} failed:`, String(e?.message || e).slice(0, 160))
+        }
+      }
+      if (!text) {
         // السحابة فشلت → المحلي احتياطًا (إن وُجد)، وإلا نفشل بصدق
         if ((await ollamaStatus()) && (await ollamaHasModel(VISION_MODEL))) {
           emitUser(req.user.email, { type: 'agent_event', agent: 'Vision', message: `⚠️ السحابة تعذّرت — أُكمل محليًا…`, status: 'running' })
           text = await ollamaVision(base64, prompt)
           via = `ollama/${VISION_MODEL}`
         } else {
-          throw cloudErr
+          throw cloudErr || new Error('vision unavailable')
         }
       }
       audit({ user: req.user.email, agent: 'vision', action: buildMode ? 'analyze+spec' : 'analyze', result: text.slice(0, 300), status: 'success', duration: Date.now() - t0 })

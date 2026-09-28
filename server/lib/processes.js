@@ -76,11 +76,33 @@ function track(email, rec) {
 }
 
 /**
- * تشغيل عملية حقيقية.
- * - command: مثل "npm run dev" (يُفحص ضد قائمة terminal البيضاء + الخطورة)
- * - cwd: مسار نسبي داخل workspace المستخدم
- * - port: مفضل (اختياري) — يُحقن كـ PORT في البيئة
+ * بيئة المشروع (§18): دمج مضبوط — نظام آمن + مشروع + PORT.
+ * يقرأ `<cwd>/.ghennai.env` (سطور KEY=VALUE) ويدمج المسموح فقط.
+ * الممنوع (أسرار/تجاوزات خطيرة) يُسقط بصمت ولا يُعرض أبدًا.
  */
+const ENV_BLOCK = /SECRET|TOKEN|PASSW|PRIVATE|AWS_|GH_|^KEY/i
+const ENV_ALLOW = /^[A-Za-z_][A-Za-z0-9_]*$/
+export function readProjectEnv(dir) {
+  const out = {}
+  let file = null
+  try {
+    file = fs.readFileSync(path.join(dir, '.ghennai.env'), 'utf8')
+  } catch { return out }
+  for (const line of String(file).split('\n')) {
+    const t = line.trim()
+    if (!t || t.startsWith('#')) continue
+    const eq = t.indexOf('=')
+    if (eq < 1) continue
+    const k = t.slice(0, eq).trim()
+    let v = t.slice(eq + 1).trim()
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+    if (!ENV_ALLOW.test(k) || ENV_BLOCK.test(k)) continue
+    if (['PATH', 'HOME', 'PORT', 'SHELL'].includes(k)) continue
+    if (v.length > 2000) continue
+    out[k] = v
+  }
+  return out
+}
 export async function start({ email, cwd = '.', command, port = null, timeoutMs = 45000 }) {
   const ws = userWorkspace(email)
   let dir
@@ -107,9 +129,10 @@ export async function start({ email, cwd = '.', command, port = null, timeoutMs 
   track(email, rec)
 
   emitUser(email, { type: 'preview_log', id, kind: 'cmd', text: `$ ${command}  (port ${usePort})\n` })
+  // §18: نظام آمن + بيئة المشروع (مفلترة) + PORT — القيم لا تُسجَّل أبدًا
   const child = spawn('/bin/bash', ['-lc', command], {
     cwd: dir,
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG, TERM: 'dumb', PORT: String(usePort), NPM_CONFIG_YES: 'true' },
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG, TERM: 'dumb', ...readProjectEnv(dir), PORT: String(usePort), NPM_CONFIG_YES: 'true' },
     shell: false,
   })
   rec.child = child

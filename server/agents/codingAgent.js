@@ -18,7 +18,7 @@ import { gitRepoInfo } from '../lib/approvalGate.js'
 import * as procs from '../lib/processes.js'
 import searchTools from '../tools/search.js'
 
-const MAX_ITERATIONS = 10
+const MAX_ITERATIONS = 14
 const MAX_TYPED_CHARS = 30000
 const MAX_FIX_ROUNDS = 2
 

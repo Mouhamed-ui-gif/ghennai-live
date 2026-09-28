@@ -26,6 +26,7 @@ async function warmup() {
   warming = true
   const t0 = Date.now()
   const model = process.env.OLLAMA_MODEL || 'qwen2.5:3b'
+  const vision = process.env.OLLAMA_VISION_MODEL || 'moondream'
   console.log(`[warmup] تحميل النموذج المحلي مسبقًا (${model})...`)
   let lastErr = null
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -41,6 +42,11 @@ async function warmup() {
     }
   }
   if (!warmed) console.warn('[warmup] فشل التسخين:', lastErr?.message)
+  // تسخين نموذج الرؤية أيضًا في الخلفية (moondream البارد يتجاوز الدقيقتين)
+  pingLocal(vision).then(
+    () => console.log(`[warmup] نموذج الرؤية جاهز (${vision}) خلال ${((Date.now() - t0) / 1000).toFixed(1)}s`),
+    (e) => console.warn('[warmup] تخطي تسخين الرؤية:', String(e?.message || e).slice(0, 100))
+  )
   warming = false
 }
 

@@ -36,12 +36,14 @@ export const shareCodeValid = (code) => /^[a-z0-9]{6,12}$/i.test(String(code || 
 
 const __dir = path.dirname(fileURLToPath(import.meta.url))
 
-/** القاعدة العامة للروابط: PUBLIC_URL ← رابط التونل الحي ← '' (نسبي) */
+/** القاعدة العامة للروابط: PUBLIC_URL ← RENDER_EXTERNAL_URL ← رابط التونل الحي (< 10 دقائق) ← '' (نسبي) */
 export function publicBase() {
-  const env = String(process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '')
+  const env = String(process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/+$/, '')
   if (env) return env
   try {
     const j = JSON.parse(fs.readFileSync(path.join(__dir, '..', 'data', 'tunnel.json'), 'utf8'))
+    // التونل الميت أسوأ من النسبي: تجاهل أي رابط أقدم من 10 دقائق
+    if (Date.now() - Number(j?.updatedAt || 0) > 10 * 60 * 1000) return ''
     const u = String(j?.url || '').trim().replace(/\/+$/, '')
     if (/^https?:\/\//i.test(u)) return u
   } catch { /* لا تونل — نسبي */ }
